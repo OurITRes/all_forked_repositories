@@ -117,6 +117,9 @@ CENTRAL_CLONE_URL="https://${PAT}@github.com/${REPO_CENTRAL_OWNER}/${REPO_CENTRA
 if [[ "$DRY_RUN" -eq 0 ]]; then
   log "Cloning central repo ${REPO_CENTRAL} into $CENTRAL_DIR"
   git clone --depth 1 "$CENTRAL_CLONE_URL" "$CENTRAL_DIR"
+  # Ensure git identity is set in the cloned central repo so commits don't fail
+  git -C "$CENTRAL_DIR" config user.name "Forks Manager (automation)"
+  git -C "$CENTRAL_DIR" config user.email "noreply@ouritres.local"
 else
   log "DRY_RUN: would clone central repo ${REPO_CENTRAL}"
   mkdir -p "$CENTRAL_DIR"
@@ -259,42 +262,57 @@ for idx in $(seq 0 $((COUNT-1))); do
     rm -rf "$SRC_DIR"
     continue
   fi
-
   if [[ "$PR_MODE" -eq 1 ]]; then
-    log "PR mode: create branch $branch_name, commit and push, then create PR"
-    git -C "$CENTRAL_DIR" config --get user.name >>"$perlog" 2>&1
-    git -C "$CENTRAL_DIR" config --get user.email >>"$perlog" 2>&1
-    git status --untracked-files=all >>"$perlog" 2>&1
-    git diff --staged >>"$perlog" 2>&1
-    # ensure branch doesn't already exist
-    git branch -D "$branch_name" >/dev/null 2>&1 || true
-    if ! git commit -m "Import ${src} (squashed)" >>"$perlog" 2>&1; then
+    # define branch_name BEFORE usage (avoid unbound variable)
+    branch_name="import/${name}-${DATESTR}"
+    log "PR mode: create branch ${branch_name}, commit and push, then create PR"
+
+    # show git config and status for debugging
+    git -C "$CENTRAL_DIR" config --get user.name >>"$perlog" 2>&1 || true
+    git -C "$CENTRAL_DIR" config --get user.email >>"$perlog" 2>&1 || true
+    git -C "$CENTRAL_DIR" status --untracked-files=all >>"$perlog" 2>&1 || true
+    git -C "$CENTRAL_DIR" diff --staged >>"$perlog" 2>&1 || true
+
+    # ensure branch doesn't already exist locally
+    git -C "$CENTRAL_DIR" branch -D "$branch_name" >/dev/null 2>&1 || true
+
+    # commit (fail => log and continue)
+    if ! git -C "$CENTRAL_DIR" commit -m "Import ${src} (squashed)" >>"$perlog" 2>&1; then
       log "ERROR: git commit failed for $name, check $perlog"
-      cat "$perlog"
+      echo "-------- last 200 lines of $perlog --------"
+      tail -n 200 "$perlog" || true
       popd >/dev/null
       rm -rf "$SRC_DIR"
       continue
     fi
-    if ! git checkout -b "$branch_name" >> "$perlog" 2>&1; then
-      log "ERROR: git checkout failed for $branch_name for $name (voir $perlog)"
-      cat "$perlog"
+
+    # create branch and push
+    if ! git -C "$CENTRAL_DIR" checkout -b "$branch_name" >>"$perlog" 2>&1; then
+      log "ERROR: git checkout -b ${branch_name} failed for $name (voir $perlog)"
+      tail -n 200 "$perlog" || true
       popd >/dev/null
       rm -rf "$SRC_DIR"
       continue
     fi
+
     log "Pushing branch $branch_name to origin..."
-    if ! git push origin "$branch_name" >>"$perlog" 2>&1; then
+    if ! git -C "$CENTRAL_DIR" push origin "$branch_name" >>"$perlog" 2>&1; then
       log "ERROR: git push failed for $name (check $perlog pour l'erreur exacte)"
-      cat "$perlog"
+      tail -n 200 "$perlog" || true
       popd >/dev/null
       rm -rf "$SRC_DIR"
       continue
     fi
+
+    # create PR (call existing function)
+    pr_title="Import ${src} (squashed) into /${name}"
+    pr_body="Automated import (squashed) of ${src} into ${REPO_CENTRAL}/${name}.\n\nUpstream: ${upstream:-unknown}"
+    create_pr "$branch_name" "$pr_title" "$pr_body" "$CENTRAL_DEFAULT_BRANCH" >>"$perlog" 2>&1 || log "WARN: PR creation failed for $name"
   else
     # direct push to default branch
     if [[ "$DRY_RUN" -eq 1 ]]; then
       log "DRY_RUN: would commit and push changes to ${CENTRAL_DEFAULT_BRANCH} on ${REPO_CENTRAL}"
-      echo "DRY_RUN: would commit & push to central repo" >> "$perlog"
+      echo "DRY_RUN: would commit & push to central repo" >> "$plog"
     else
       git commit -m "Import ${src} (squashed) into /${name}" >/dev/null 2>>"$perlog"
       log "Pushing changes to origin/${CENTRAL_DEFAULT_BRANCH}..."
