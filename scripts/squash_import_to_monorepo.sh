@@ -2,26 +2,16 @@
 set -euo pipefail
 
 # squash_import_to_monorepo.sh
-# Import (squashed) each fork listed in forks.yaml into OurITRes/all_forked_repositories/<name>
+# Import (squashed) each fork listed in forks.yaml into OurITRes/all_forked_repositories/<path>
+# This version respects `migrate_to` field in forks.yaml:
+#  - if migrate_to is a URL under the all_forked_repositories repo, the path after
+#    .../all_forked_repositories/ is used as the destination folder (can contain subfolders).
+#  - if migrate_to is a relative path (no scheme), it is used as-is.
+#  - otherwise fallback to using the repository name.
 #
-# Features:
-#  - --dry-run : simulate actions (no push, no PR, no delete)
-#  - --pr : push to a branch and create a Pull Request instead of pushing to default branch
-#  - --force : overwrite existing target subfolder
-#  - --second-pass : only perform second-pass deletion checks (see --delete-old)
-#  - --delete-old : when used with --second-pass, delete the old repo OurITRes/<name> after checks
+# See previous script for full usage and flags (--dry-run, --pr, --force, --second-pass, --delete-old).
 #
 # Requirements: git, curl, jq, rsync, python3, PyYAML
-# Environment:
-#   FORKS_MANAGER_PAT - optional (classic PAT or fine-grained); fallback to GITHUB_TOKEN automatically in Actions
-#
-# Usage examples:
-#   # dry-run locally (no network modifications)
-#   ./scripts/squash_import_to_monorepo.sh forks.yaml --dry-run
-#
-#   # real run in PR mode (creates import branches + PRs)
-#   export FORKS_MANAGER_PAT="ghp_xxx..."   # optional; in Actions GITHUB_TOKEN will be used
-#   ./scripts/squash_import_to_monorepo.sh forks.yaml --pr
 
 REPO_CENTRAL_OWNER="OurITRes"
 REPO_CENTRAL_NAME="all_forked_repositories"
@@ -45,7 +35,6 @@ EOF
   exit 2
 }
 
-# parse args
 if [[ $# -lt 1 ]]; then usage; fi
 FORKS_YAML="$1"; shift || true
 
@@ -64,7 +53,6 @@ done
 
 # Prefer FORKS_MANAGER_PAT if set, otherwise fallback to GITHUB_TOKEN (useful in Actions)
 PAT="${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}"
-
 if [[ -z "$PAT" && "$DRY_RUN" -eq 0 ]]; then
   echo "[ERROR] FORKS_MANAGER_PAT env var not set and GITHUB_TOKEN not available (required unless --dry-run)."
   exit 1
@@ -76,7 +64,7 @@ log() {
 
 log "Start import run (DRY_RUN=$DRY_RUN, PR_MODE=$PR_MODE, SECOND_PASS=$SECOND_PASS, DELETE_OLD=$DELETE_OLD)"
 
-# helper: parse forks.yaml to JSON array of {source,name,default_branch,upstream,url}
+# parse forks.yaml and include migrate_to
 parse_forks() {
   python3 - "$FORKS_YAML" <<'PY'
 import sys, yaml, json
@@ -89,11 +77,53 @@ for f in forks:
         "name": f.get("name"),
         "default_branch": f.get("default_branch", "master"),
         "upstream": f.get("upstream", ""),
-        "url": f.get("url","")
+        "url": f.get("url",""),
+        "migrate_to": f.get("migrate_to","")
     }
     out.append(entry)
 print(json.dumps(out))
 PY
+}
+
+# Helper: compute relative destination path inside central repo from migrate_to field
+# Rules:
+# - If migrate_to is empty -> fallback to name
+# - If migrate_to looks like a URL that contains "/all_forked_repositories/" -> extract the path after that
+# - Else if migrate_to looks like an absolute URL but not the central repo -> fallback to name
+# - Else if migrate_to is a relative path (no scheme) -> use it directly
+compute_dest_path() {
+  local migrate_to="$1"
+  local default_name="$2"
+  if [[ -z "$migrate_to" || "$migrate_to" == "null" ]]; then
+    echo "$default_name"
+    return
+  fi
+
+  # If begins with http or https, try to extract path after /all_forked_repositories/
+  if [[ "$migrate_to" =~ ^https?:// ]]; then
+    # strip trailing slash
+    local m=$(echo "$migrate_to" | sed 's#/$##')
+    # attempt to find ".../all_forked_repositories/"
+    if echo "$m" | grep -q "/${REPO_CENTRAL_NAME}/"; then
+      # extract part after /all_forked_repositories/
+      local path_after=$(echo "$m" | sed -E "s#.*\/${REPO_CENTRAL_NAME}\/(.*)#\1#")
+      # if empty fallback to default_name
+      if [[ -z "$path_after" ]]; then
+        echo "$default_name"
+      else
+        # sanitize: remove leading/trailing slashes
+        echo "$path_after" | sed 's#^/*##; s#/*$##'
+      fi
+      return
+    else
+      # URL not pointing into the central repo: fallback to default
+      echo "$default_name"
+      return
+    fi
+  fi
+
+  # Otherwise treat as a relative path (sanitize)
+  echo "$migrate_to" | sed 's#^/*##; s#/*$##'
 }
 
 get_central_default_branch() {
@@ -109,18 +139,15 @@ get_central_default_branch() {
 CENTRAL_DEFAULT_BRANCH="$(get_central_default_branch)"
 log "Central repo default branch: $CENTRAL_DEFAULT_BRANCH"
 
-# clone central repo once (to apply commits / create branches / push)
 TMPDIR="$(mktemp -d -t forks-import-XXXX)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 CENTRAL_DIR="$TMPDIR/$REPO_CENTRAL_NAME"
-# embed token into URL for pushes/clones (only used when not in dry-run)
 CENTRAL_CLONE_URL="https://${PAT}@github.com/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}.git"
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
   log "Cloning central repo ${REPO_CENTRAL} into $CENTRAL_DIR"
   git clone --depth 1 "$CENTRAL_CLONE_URL" "$CENTRAL_DIR"
-  # Ensure git identity is set in the cloned central repo so commits don't fail
   git -C "$CENTRAL_DIR" config user.name "Forks Manager (automation)"
   git -C "$CENTRAL_DIR" config user.email "noreply@ouritres.local"
 else
@@ -133,7 +160,6 @@ ENTRIES_JSON="$(parse_forks)"
 COUNT=$(echo "$ENTRIES_JSON" | jq 'length')
 log "Found $COUNT entries in $FORKS_YAML"
 
-# helper to create PR (tries 'gh' first, then GitHub API)
 create_pr() {
   local branch="$1"; local title="$2"; local body="$3"; local base="$4"
   if command -v gh >/dev/null 2>&1; then
@@ -141,7 +167,6 @@ create_pr() {
       log "DRY_RUN: gh pr create --repo ${REPO_CENTRAL} --title \"$title\" --body \"$body\" --base $base --head ${REPO_CENTRAL_OWNER}:$branch"
       return 0
     fi
-    log "Creating PR with gh for branch $branch"
     gh pr create --repo "${REPO_CENTRAL}" --title "$title" --body "$body" --base "$base" --head "${REPO_CENTRAL_OWNER}:$branch" || {
       log "WARN: gh pr create failed"
       return 1
@@ -166,7 +191,6 @@ create_pr() {
   fi
 }
 
-# helper to delete repo OurITRes/<name>
 delete_org_repo() {
   local owner="$1"; local repo="$2"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -179,7 +203,6 @@ delete_org_repo() {
   return 0
 }
 
-# iterate entries
 for idx in $(seq 0 $((COUNT-1))); do
   item="$(echo "$ENTRIES_JSON" | jq -r ".[$idx]")"
   src="$(echo "$item" | jq -r '.source')"
@@ -187,15 +210,18 @@ for idx in $(seq 0 $((COUNT-1))); do
   branch="$(echo "$item" | jq -r '.default_branch')"
   upstream="$(echo "$item" | jq -r '.upstream')"
   url="$(echo "$item" | jq -r '.url')"
+  migrate_to="$(echo "$item" | jq -r '.migrate_to')"
 
   perlog="$LOGDIR/${name}-$DATESTR.log"
   echo "=== Processing $src -> $name (branch:$branch) ===" | tee -a "$perlog" >> "$MAIN_LOG"
 
-  # SECOND_PASS mode: only check existence of import and optionally delete original repo
   if [[ "$SECOND_PASS" -eq 1 ]]; then
-    if [[ -d "$CENTRAL_DIR/$name" ]]; then
-      log "Second-pass: Found $CENTRAL_DIR/$name (import confirmed)."
-      echo "Second-pass: Found $CENTRAL_DIR/$name (import confirmed)." >> "$perlog"
+    # in second-pass we check for existence under central repo at the computed path
+    dest_path="$(compute_dest_path "$migrate_to" "$name")"
+    TARGET_SUBDIR="$CENTRAL_DIR/$dest_path"
+    if [[ -d "$TARGET_SUBDIR" ]]; then
+      log "Second-pass: Found $TARGET_SUBDIR (import confirmed)."
+      echo "Second-pass: Found $TARGET_SUBDIR (import confirmed)." >> "$perlog"
       if [[ "$DELETE_OLD" -eq 1 ]]; then
         OLD_OWNER="$REPO_CENTRAL_OWNER"
         OLD_REPO="$name"
@@ -207,13 +233,12 @@ for idx in $(seq 0 $((COUNT-1))); do
         fi
       fi
     else
-      log "Second-pass: Import of $name NOT found under central repo ($CENTRAL_DIR/$name) — skipping deletion."
+      log "Second-pass: Import of $name NOT found under central repo ($TARGET_SUBDIR) — skipping deletion."
       echo "Second-pass: Import NOT found — skipping deletion." >> "$perlog"
     fi
     continue
   fi
 
-  # Normal pass: clone source, copy, commit and push or create PR
   SRC_DIR="$TMPDIR/src-$name"
   log "Cloning source https://github.com/$src (branch=$branch) into $SRC_DIR"
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -226,7 +251,9 @@ for idx in $(seq 0 $((COUNT-1))); do
     fi
   fi
 
-  TARGET_SUBDIR="$CENTRAL_DIR/$name"
+  dest_path="$(compute_dest_path "$migrate_to" "$name")"
+  TARGET_SUBDIR="$CENTRAL_DIR/$dest_path"
+
   if [[ -d "$TARGET_SUBDIR" && "$FORCE" -eq 0 ]]; then
     log "ERROR: Target $TARGET_SUBDIR exists. Use --force to overwrite. Skipping $name."
     echo "Target exists; skipping." >> "$perlog"
@@ -239,7 +266,10 @@ for idx in $(seq 0 $((COUNT-1))); do
     rm -rf "$TARGET_SUBDIR"
   fi
 
+  # ensure parent directories exist
+  mkdir -p "$(dirname "$TARGET_SUBDIR")"
   mkdir -p "$TARGET_SUBDIR"
+
   log "Copying files (excluding .git) into $TARGET_SUBDIR"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     log "DRY_RUN: rsync -a --exclude='.git' --delete $SRC_DIR/ $TARGET_SUBDIR/"
@@ -248,12 +278,37 @@ for idx in $(seq 0 $((COUNT-1))); do
     rsync -a --exclude='.git' --delete "$SRC_DIR"/ "$TARGET_SUBDIR"/ >>"$perlog" 2>&1
   fi
 
-  # Prepare commit/branch
+  # commit path relative to repo
+  rel_path="$(python3 - <<PY
+import os, json, sys
+migrate = json.loads('''$migrate_to''') if '''$migrate_to''' != 'null' else ''
+# compute same dest_path logic as bash compute_dest_path for safe relative path
+s = "$migrate_to"
+if s == "" or s == "null":
+    print("$name")
+else:
+    import re
+    if s.startswith("http://") or s.startswith("https://"):
+        m = re.search(r"/${REPO_CENTRAL_NAME}/(.*)$", s)
+        if m:
+            print(m.group(1).strip('/'))
+        else:
+            print("$name")
+    else:
+        print(s.strip('/'))
+PY
+)"
+
+  # fallback if python produced nothing
+  if [[ -z "$rel_path" ]]; then
+    rel_path="$name"
+  fi
+
   pushd "$CENTRAL_DIR" >/dev/null
-  git add --all -- "$name" >>"$perlog" 2>&1 || true
+  git add --all -- "$rel_path" >>"$perlog" 2>&1 || true
 
   if git diff --staged --quiet; then
-    log "No changes detected for $name; nothing to do."
+    log "No changes detected for $name at $rel_path; nothing to do."
     echo "No changes detected." >> "$perlog"
     popd >/dev/null
     rm -rf "$SRC_DIR"
@@ -264,26 +319,21 @@ for idx in $(seq 0 $((COUNT-1))); do
     branch_name="import/${name}-${DATESTR}"
     log "PR mode: create branch ${branch_name}, commit and push, then create PR"
 
-    # debug info
     git -C "$CENTRAL_DIR" config --get user.name >>"$perlog" 2>&1 || true
     git -C "$CENTRAL_DIR" config --get user.email >>"$perlog" 2>&1 || true
     git -C "$CENTRAL_DIR" status --untracked-files=all >>"$perlog" 2>&1 || true
     git -C "$CENTRAL_DIR" diff --staged >>"$perlog" 2>&1 || true
 
-    # ensure branch doesn't already exist locally
     git -C "$CENTRAL_DIR" branch -D "$branch_name" >/dev/null 2>&1 || true
 
-    # commit
-    if ! git -C "$CENTRAL_DIR" commit -m "Import ${src} (squashed)" >>"$perlog" 2>&1; then
+    if ! git -C "$CENTRAL_DIR" commit -m "Import ${src} (squashed) into /${rel_path}" >>"$perlog" 2>&1; then
       log "ERROR: git commit failed for $name, check $perlog"
-      echo "-------- last 200 lines of $perlog --------"
       tail -n 200 "$perlog" || true
       popd >/dev/null
       rm -rf "$SRC_DIR"
       continue
     fi
 
-    # create branch & push
     if ! git -C "$CENTRAL_DIR" checkout -b "$branch_name" >>"$perlog" 2>&1; then
       log "ERROR: git checkout -b ${branch_name} failed for $name (voir $perlog)"
       tail -n 200 "$perlog" || true
@@ -301,20 +351,18 @@ for idx in $(seq 0 $((COUNT-1))); do
       continue
     fi
 
-    pr_title="Import ${src} (squashed) into /${name}"
-    pr_body="Automated import (squashed) of ${src} into ${REPO_CENTRAL}/${name}.\n\nUpstream: ${upstream:-unknown}"
+    pr_title="Import ${src} (squashed) into /${rel_path}"
+    pr_body="Automated import (squashed) of ${src} into ${REPO_CENTRAL}/${rel_path}.\n\nUpstream: ${upstream:-unknown}"
     create_pr "$branch_name" "$pr_title" "$pr_body" "$CENTRAL_DEFAULT_BRANCH" >>"$perlog" 2>&1 || log "WARN: PR creation failed for $name"
 
-    # switch back to default branch in local clone to be safe
     git -C "$CENTRAL_DIR" checkout "$CENTRAL_DEFAULT_BRANCH" >/dev/null 2>&1 || true
 
   else
-    # direct push to default branch
     if [[ "$DRY_RUN" -eq 1 ]]; then
       log "DRY_RUN: would commit and push changes to ${CENTRAL_DEFAULT_BRANCH} on ${REPO_CENTRAL}"
       echo "DRY_RUN: would commit & push to central repo" >> "$perlog"
     else
-      if ! git -C "$CENTRAL_DIR" commit -m "Import ${src} (squashed) into /${name}" >>"$perlog" 2>&1; then
+      if ! git -C "$CENTRAL_DIR" commit -m "Import ${src} (squashed) into /${rel_path}" >>"$perlog" 2>&1; then
         log "ERROR: git commit failed for $name (check $perlog)"
         tail -n 200 "$perlog" || true
         popd >/dev/null
@@ -335,7 +383,7 @@ for idx in $(seq 0 $((COUNT-1))); do
 
   popd >/dev/null
   rm -rf "$SRC_DIR"
-  log "Completed processing $name"
+  log "Completed processing $name -> $rel_path"
 done
 
 log "Run finished. Logs: $MAIN_LOG"
