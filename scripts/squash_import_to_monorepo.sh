@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# squash_import_to_monorepo.sh
-# Import (squashed) each fork listed in forks.yaml into OurITRes/all_forked_repositories/<path>
-# This version respects `migrate_to` field in forks.yaml:
-#  - if migrate_to is a URL under the all_forked_repositories repo, the path after
-#    .../all_forked_repositories/ is used as the destination folder (can contain subfolders).
-#  - if migrate_to is a relative path (no scheme), it is used as-is.
-#  - otherwise fallback to using the repository name.
-#
-# See previous script for full usage and flags (--dry-run, --pr, --force, --second-pass, --delete-old).
+# squash_import_to_monorepo.sh (final)
+# Imports forks listed in forks.yaml into OurITRes/all_forked_repositories
+# - Respects `migrate_to` (writes into subfolders)
+# - Supports --dry-run, --pr, --force, --second-pass, --delete-old
+# - Prefer GITHUB_TOKEN in Actions; use FORKS_MANAGER_PAT locally if provided
 #
 # Requirements: git, curl, jq, rsync, python3, PyYAML
 
@@ -51,10 +47,16 @@ while (( "$#" )); do
   shift
 done
 
-# Prefer FORKS_MANAGER_PAT if set, otherwise fallback to GITHUB_TOKEN (useful in Actions)
-PAT="${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}"
+# Prefer GITHUB_TOKEN in Actions (safer for orgs). Locally use FORKS_MANAGER_PAT if provided.
+# If both are set in Actions we will prefer GITHUB_TOKEN.
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  PAT="${GITHUB_TOKEN:-${FORKS_MANAGER_PAT:-}}"
+else
+  PAT="${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}"
+fi
+
 if [[ -z "$PAT" && "$DRY_RUN" -eq 0 ]]; then
-  echo "[ERROR] FORKS_MANAGER_PAT env var not set and GITHUB_TOKEN not available (required unless --dry-run)."
+  echo "[ERROR] FORKS_MANAGER_PAT or GITHUB_TOKEN must be available (required unless --dry-run)."
   exit 1
 fi
 
@@ -63,6 +65,7 @@ log() {
 }
 
 log "Start import run (DRY_RUN=$DRY_RUN, PR_MODE=$PR_MODE, SECOND_PASS=$SECOND_PASS, DELETE_OLD=$DELETE_OLD)"
+log "Using PAT: $( [[ -n "${PAT:-}" ]] && echo 'yes' || echo 'no' ) (will prefer GITHUB_TOKEN in Actions if available)"
 
 # parse forks.yaml and include migrate_to
 parse_forks() {
@@ -85,12 +88,7 @@ print(json.dumps(out))
 PY
 }
 
-# Helper: compute relative destination path inside central repo from migrate_to field
-# Rules:
-# - If migrate_to is empty -> fallback to name
-# - If migrate_to looks like a URL that contains "/all_forked_repositories/" -> extract the path after that
-# - Else if migrate_to looks like an absolute URL but not the central repo -> fallback to name
-# - Else if migrate_to is a relative path (no scheme) -> use it directly
+# compute relative destination path inside central repo from migrate_to field
 compute_dest_path() {
   local migrate_to="$1"
   local default_name="$2"
@@ -98,31 +96,21 @@ compute_dest_path() {
     echo "$default_name"
     return
   fi
-
-  # If begins with http or https, try to extract path after /all_forked_repositories/
   if [[ "$migrate_to" =~ ^https?:// ]]; then
-    # strip trailing slash
     local m=$(echo "$migrate_to" | sed 's#/$##')
-    # attempt to find ".../all_forked_repositories/"
     if echo "$m" | grep -q "/${REPO_CENTRAL_NAME}/"; then
-      # extract part after /all_forked_repositories/
       local path_after=$(echo "$m" | sed -E "s#.*\/${REPO_CENTRAL_NAME}\/(.*)#\1#")
-      # if empty fallback to default_name
       if [[ -z "$path_after" ]]; then
         echo "$default_name"
       else
-        # sanitize: remove leading/trailing slashes
         echo "$path_after" | sed 's#^/*##; s#/*$##'
       fi
       return
     else
-      # URL not pointing into the central repo: fallback to default
       echo "$default_name"
       return
     fi
   fi
-
-  # Otherwise treat as a relative path (sanitize)
   echo "$migrate_to" | sed 's#^/*##; s#/*$##'
 }
 
@@ -216,7 +204,6 @@ for idx in $(seq 0 $((COUNT-1))); do
   echo "=== Processing $src -> $name (branch:$branch) ===" | tee -a "$perlog" >> "$MAIN_LOG"
 
   if [[ "$SECOND_PASS" -eq 1 ]]; then
-    # in second-pass we check for existence under central repo at the computed path
     dest_path="$(compute_dest_path "$migrate_to" "$name")"
     TARGET_SUBDIR="$CENTRAL_DIR/$dest_path"
     if [[ -d "$TARGET_SUBDIR" ]]; then
@@ -266,7 +253,6 @@ for idx in $(seq 0 $((COUNT-1))); do
     rm -rf "$TARGET_SUBDIR"
   fi
 
-  # ensure parent directories exist
   mkdir -p "$(dirname "$TARGET_SUBDIR")"
   mkdir -p "$TARGET_SUBDIR"
 
@@ -278,31 +264,9 @@ for idx in $(seq 0 $((COUNT-1))); do
     rsync -a --exclude='.git' --delete "$SRC_DIR"/ "$TARGET_SUBDIR"/ >>"$perlog" 2>&1
   fi
 
-  # commit path relative to repo
-  rel_path="$(python3 - <<PY
-import os, json, sys
-migrate = json.loads('''$migrate_to''') if '''$migrate_to''' != 'null' else ''
-# compute same dest_path logic as bash compute_dest_path for safe relative path
-s = "$migrate_to"
-if s == "" or s == "null":
-    print("$name")
-else:
-    import re
-    if s.startswith("http://") or s.startswith("https://"):
-        m = re.search(r"/${REPO_CENTRAL_NAME}/(.*)$", s)
-        if m:
-            print(m.group(1).strip('/'))
-        else:
-            print("$name")
-    else:
-        print(s.strip('/'))
-PY
-)"
-
-  # fallback if python produced nothing
-  if [[ -z "$rel_path" ]]; then
-    rel_path="$name"
-  fi
+  # compute rel_path to commit
+  rel_path="$(compute_dest_path "$migrate_to" "$name")"
+  if [[ -z "$rel_path" ]]; then rel_path="$name"; fi
 
   pushd "$CENTRAL_DIR" >/dev/null
   git add --all -- "$rel_path" >>"$perlog" 2>&1 || true
