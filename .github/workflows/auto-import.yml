@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       run_mode:
-        description: 'run mode: "dry-run" => simulate; "real" => perform import (will create PRs). Choose "real" only when ready.'
+        description: 'run mode: "dry-run" => simulate; "real" => perform import (creates PRs). Choose "real" only when ready.'
         required: true
         default: 'dry-run'
   schedule:
@@ -38,19 +38,22 @@ jobs:
 
       - name: Prepare and run import
         env:
+          # Optional: you can set FORKS_MANAGER_PAT in repo secrets for a PAT.
+          # If absent, the script will fallback to GITHUB_TOKEN (available in Actions).
           FORKS_MANAGER_PAT: ${{ secrets.FORKS_MANAGER_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x scripts/squash_import_to_monorepo.sh
-          # Default: dry-run
           if [ "${{ github.event.inputs.run_mode || 'dry-run' }}" = "real" ]; then
-            echo "Running REAL import: will create PRs (--pr). Make sure FORKS_MANAGER_PAT has 'repo' scope and permission to push/create branches."
+            echo "Running REAL import: will create PRs (--pr). Make sure FORKS_MANAGER_PAT or GITHUB_TOKEN have required permissions."
             ./scripts/squash_import_to_monorepo.sh forks.yaml --pr
           else
             echo "Running DRY-RUN (no push / PR / delete)."
             ./scripts/squash_import_to_monorepo.sh forks.yaml --dry-run
           fi
-          
+
       - name: Upload logs (artifacts)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: import-logs

@@ -13,14 +13,15 @@ set -euo pipefail
 #
 # Requirements: git, curl, jq, rsync, python3, PyYAML
 # Environment:
-#   FORKS_MANAGER_PAT - GitHub token (with repo scope, and admin rights if deletion is required)
+#   FORKS_MANAGER_PAT - optional (classic PAT or fine-grained); fallback to GITHUB_TOKEN automatically in Actions
 #
-# Example:
-#   export FORKS_MANAGER_PAT="ghp_xxx..."
-#   chmod +x scripts/squash_import_to_monorepo.sh
+# Usage examples:
+#   # dry-run locally (no network modifications)
 #   ./scripts/squash_import_to_monorepo.sh forks.yaml --dry-run
+#
+#   # real run in PR mode (creates import branches + PRs)
+#   export FORKS_MANAGER_PAT="ghp_xxx..."   # optional; in Actions GITHUB_TOKEN will be used
 #   ./scripts/squash_import_to_monorepo.sh forks.yaml --pr
-#   ./scripts/squash_import_to_monorepo.sh forks.yaml --second-pass --delete-old
 
 REPO_CENTRAL_OWNER="OurITRes"
 REPO_CENTRAL_NAME="all_forked_repositories"
@@ -61,9 +62,11 @@ while (( "$#" )); do
   shift
 done
 
-PAT="${FORKS_MANAGER_PAT:-}"
+# Prefer FORKS_MANAGER_PAT if set, otherwise fallback to GITHUB_TOKEN (useful in Actions)
+PAT="${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}"
+
 if [[ -z "$PAT" && "$DRY_RUN" -eq 0 ]]; then
-  echo "[ERROR] FORKS_MANAGER_PAT environment variable not set (required unless --dry-run)."
+  echo "[ERROR] FORKS_MANAGER_PAT env var not set and GITHUB_TOKEN not available (required unless --dry-run)."
   exit 1
 fi
 
@@ -73,7 +76,7 @@ log() {
 
 log "Start import run (DRY_RUN=$DRY_RUN, PR_MODE=$PR_MODE, SECOND_PASS=$SECOND_PASS, DELETE_OLD=$DELETE_OLD)"
 
-# helper: parse forks.yaml to JSON array of {source,name,default_branch,upstream}
+# helper: parse forks.yaml to JSON array of {source,name,default_branch,upstream,url}
 parse_forks() {
   python3 - "$FORKS_YAML" <<'PY'
 import sys, yaml, json
@@ -93,7 +96,6 @@ print(json.dumps(out))
 PY
 }
 
-# get default branch of central repo via GH API
 get_central_default_branch() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "main"
@@ -112,6 +114,7 @@ TMPDIR="$(mktemp -d -t forks-import-XXXX)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 CENTRAL_DIR="$TMPDIR/$REPO_CENTRAL_NAME"
+# embed token into URL for pushes/clones (only used when not in dry-run)
 CENTRAL_CLONE_URL="https://${PAT}@github.com/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}.git"
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -123,7 +126,6 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
 else
   log "DRY_RUN: would clone central repo ${REPO_CENTRAL}"
   mkdir -p "$CENTRAL_DIR"
-  # initialize a fake git repo locally for dry-run to compute paths
   (cd "$CENTRAL_DIR" && git init >/dev/null 2>&1 || true)
 fi
 
@@ -133,10 +135,10 @@ log "Found $COUNT entries in $FORKS_YAML"
 
 # helper to create PR (tries 'gh' first, then GitHub API)
 create_pr() {
-  local branch="$1"; local title="$2"; local body="$3"; local base="$4" local_create_output
+  local branch="$1"; local title="$2"; local body="$3"; local base="$4"
   if command -v gh >/dev/null 2>&1; then
     if [[ "$DRY_RUN" -eq 1 ]]; then
-      log "DRY_RUN: gh pr create --repo ${REPO_CENTRAL} --title \"$title\" --body \"$body\" --base $base --head ${REPO_CENTRAL_OWNER}:${branch}"
+      log "DRY_RUN: gh pr create --repo ${REPO_CENTRAL} --title \"$title\" --body \"$body\" --base $base --head ${REPO_CENTRAL_OWNER}:$branch"
       return 0
     fi
     log "Creating PR with gh for branch $branch"
@@ -146,7 +148,6 @@ create_pr() {
     }
     return 0
   else
-    # Use API
     if [[ "$DRY_RUN" -eq 1 ]]; then
       log "DRY_RUN: would call GitHub API to create PR (head=${REPO_CENTRAL_OWNER}:${branch}, base=$base)"
       return 0
@@ -159,7 +160,7 @@ create_pr() {
       log "PR created: $url"
       return 0
     else
-      log "ERROR creating PR: $(echo "$resp" | jq -r '.message // .')" 
+      log "ERROR creating PR: $(echo "$resp" | jq -r '.message // .')"
       return 1
     fi
   fi
@@ -173,9 +174,7 @@ delete_org_repo() {
     return 0
   fi
   log "Deleting repo https://github.com/${owner}/${repo}"
-  resp="$(curl -s -o /dev/stderr -w "%{http_code}" -X DELETE -H "Authorization: token ${PAT}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${owner}/${repo}" 2>&1)"; status=$?
-  # curl exit code is checked above; check content indirectly
-  # We can't rely on status easily here; just log success
+  resp="$(curl -s -o /dev/stderr -w "%{http_code}" -X DELETE -H "Authorization: token ${PAT}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${owner}/${repo}" 2>&1)"
   log "Deletion API call finished (check on GitHub to confirm)."
   return 0
 }
@@ -194,12 +193,10 @@ for idx in $(seq 0 $((COUNT-1))); do
 
   # SECOND_PASS mode: only check existence of import and optionally delete original repo
   if [[ "$SECOND_PASS" -eq 1 ]]; then
-    # check if subdir exists in central repo or if new repo exists
     if [[ -d "$CENTRAL_DIR/$name" ]]; then
       log "Second-pass: Found $CENTRAL_DIR/$name (import confirmed)."
       echo "Second-pass: Found $CENTRAL_DIR/$name (import confirmed)." >> "$perlog"
       if [[ "$DELETE_OLD" -eq 1 ]]; then
-        # delete old org repo only if owner is OurITRes (the old repo to remove is OurITRes/$name)
         OLD_OWNER="$REPO_CENTRAL_OWNER"
         OLD_REPO="$name"
         if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -220,10 +217,10 @@ for idx in $(seq 0 $((COUNT-1))); do
   SRC_DIR="$TMPDIR/src-$name"
   log "Cloning source https://github.com/$src (branch=$branch) into $SRC_DIR"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    log "DRY_RUN: would git clone --depth 1 --branch $branch https://github.com/$src.git $SRC_DIR"
+    log "DRY_RUN: git clone --depth 1 --branch $branch https://github.com/$src.git $SRC_DIR"
     echo "DRY_RUN: would clone $src" >> "$perlog"
   else
-    if ! git clone --depth 1 --branch "$branch" "https://github.com/$src.git" "$SRC_DIR" >/dev/null 2>>"$perlog"; then
+    if ! git clone --depth 1 --branch "$branch" "https://github.com/$src.git" "$SRC_DIR" >>"$perlog" 2>&1; then
       log "ERROR: clone failed for $src (skipping). See $perlog"
       continue
     fi
@@ -253,7 +250,7 @@ for idx in $(seq 0 $((COUNT-1))); do
 
   # Prepare commit/branch
   pushd "$CENTRAL_DIR" >/dev/null
-  git add --all "$name" >/dev/null 2>&1 || true
+  git add --all -- "$name" >>"$perlog" 2>&1 || true
 
   if git diff --staged --quiet; then
     log "No changes detected for $name; nothing to do."
@@ -262,12 +259,12 @@ for idx in $(seq 0 $((COUNT-1))); do
     rm -rf "$SRC_DIR"
     continue
   fi
+
   if [[ "$PR_MODE" -eq 1 ]]; then
-    # define branch_name BEFORE usage (avoid unbound variable)
     branch_name="import/${name}-${DATESTR}"
     log "PR mode: create branch ${branch_name}, commit and push, then create PR"
 
-    # show git config and status for debugging
+    # debug info
     git -C "$CENTRAL_DIR" config --get user.name >>"$perlog" 2>&1 || true
     git -C "$CENTRAL_DIR" config --get user.email >>"$perlog" 2>&1 || true
     git -C "$CENTRAL_DIR" status --untracked-files=all >>"$perlog" 2>&1 || true
@@ -276,7 +273,7 @@ for idx in $(seq 0 $((COUNT-1))); do
     # ensure branch doesn't already exist locally
     git -C "$CENTRAL_DIR" branch -D "$branch_name" >/dev/null 2>&1 || true
 
-    # commit (fail => log and continue)
+    # commit
     if ! git -C "$CENTRAL_DIR" commit -m "Import ${src} (squashed)" >>"$perlog" 2>&1; then
       log "ERROR: git commit failed for $name, check $perlog"
       echo "-------- last 200 lines of $perlog --------"
@@ -286,7 +283,7 @@ for idx in $(seq 0 $((COUNT-1))); do
       continue
     fi
 
-    # create branch and push
+    # create branch & push
     if ! git -C "$CENTRAL_DIR" checkout -b "$branch_name" >>"$perlog" 2>&1; then
       log "ERROR: git checkout -b ${branch_name} failed for $name (voir $perlog)"
       tail -n 200 "$perlog" || true
@@ -297,26 +294,41 @@ for idx in $(seq 0 $((COUNT-1))); do
 
     log "Pushing branch $branch_name to origin..."
     if ! git -C "$CENTRAL_DIR" push origin "$branch_name" >>"$perlog" 2>&1; then
-      log "ERROR: git push failed for $name (check $perlog pour l'erreur exacte)"
+      log "ERROR: git push failed for $name (check $perlog for exact error)"
       tail -n 200 "$perlog" || true
       popd >/dev/null
       rm -rf "$SRC_DIR"
       continue
     fi
 
-    # create PR (call existing function)
     pr_title="Import ${src} (squashed) into /${name}"
     pr_body="Automated import (squashed) of ${src} into ${REPO_CENTRAL}/${name}.\n\nUpstream: ${upstream:-unknown}"
     create_pr "$branch_name" "$pr_title" "$pr_body" "$CENTRAL_DEFAULT_BRANCH" >>"$perlog" 2>&1 || log "WARN: PR creation failed for $name"
+
+    # switch back to default branch in local clone to be safe
+    git -C "$CENTRAL_DIR" checkout "$CENTRAL_DEFAULT_BRANCH" >/dev/null 2>&1 || true
+
   else
     # direct push to default branch
     if [[ "$DRY_RUN" -eq 1 ]]; then
       log "DRY_RUN: would commit and push changes to ${CENTRAL_DEFAULT_BRANCH} on ${REPO_CENTRAL}"
-      echo "DRY_RUN: would commit & push to central repo" >> "$plog"
+      echo "DRY_RUN: would commit & push to central repo" >> "$perlog"
     else
-      git commit -m "Import ${src} (squashed) into /${name}" >/dev/null 2>>"$perlog"
+      if ! git -C "$CENTRAL_DIR" commit -m "Import ${src} (squashed) into /${name}" >>"$perlog" 2>&1; then
+        log "ERROR: git commit failed for $name (check $perlog)"
+        tail -n 200 "$perlog" || true
+        popd >/dev/null
+        rm -rf "$SRC_DIR"
+        continue
+      fi
       log "Pushing changes to origin/${CENTRAL_DEFAULT_BRANCH}..."
-      git push origin "$CENTRAL_DEFAULT_BRANCH" >/dev/null 2>>"$perlog" || { log "ERROR: push failed for $name"; popd >/dev/null; rm -rf "$SRC_DIR"; continue; }
+      if ! git -C "$CENTRAL_DIR" push origin "$CENTRAL_DEFAULT_BRANCH" >>"$perlog" 2>&1; then
+        log "ERROR: push failed for $name (check $perlog for cause)"
+        tail -n 200 "$perlog" || true
+        popd >/dev/null
+        rm -rf "$SRC_DIR"
+        continue
+      fi
       log "Pushed import for $name"
     fi
   fi
