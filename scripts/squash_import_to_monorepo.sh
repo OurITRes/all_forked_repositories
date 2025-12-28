@@ -261,21 +261,34 @@ for idx in $(seq 0 $((COUNT-1))); do
   fi
 
   if [[ "$PR_MODE" -eq 1 ]]; then
-    branch_name="import/${name}-${DATESTR}"
     log "PR mode: create branch $branch_name, commit and push, then create PR"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-      log "DRY_RUN: would git commit -m \"Import ${src} (squashed)\" and git push origin $branch_name"
-    else
-      git commit -m "Import ${src} (squashed)" >/dev/null 2>>"$perlog"
-      git checkout -b "$branch_name" >/dev/null 2>>"$perlog" || true
-      log "Pushing branch $branch_name to origin..."
-      git push origin "$branch_name" >/dev/null 2>>"$perlog" || { log "ERROR: push failed for $name"; popd >/dev/null; rm -rf "$SRC_DIR"; continue; }
-      # create PR
-      pr_title="Import ${src} (squashed) into /${name}"
-      pr_body="Automated import (squashed) of ${src} into ${REPO_CENTRAL}/${name}.\n\nUpstream: ${upstream:-unknown}"
-      create_pr "$branch_name" "$pr_title" "$pr_body" "$CENTRAL_DEFAULT_BRANCH" >>"$perlog" 2>&1 || log "WARN: PR creation failed for $name"
-      # return to default branch
-      git checkout "$CENTRAL_DEFAULT_BRANCH" >/dev/null 2>&1 || true
+    git -C "$CENTRAL_DIR" config --get user.name >>"$perlog" 2>&1
+    git -C "$CENTRAL_DIR" config --get user.email >>"$perlog" 2>&1
+    git status --untracked-files=all >>"$perlog" 2>&1
+    git diff --staged >>"$perlog" 2>&1
+    # ensure branch doesn't already exist
+    git branch -D "$branch_name" >/dev/null 2>&1 || true
+    if ! git commit -m "Import ${src} (squashed)" >>"$perlog" 2>&1; then
+      log "ERROR: git commit failed for $name, check $perlog"
+      cat "$perlog"
+      popd >/dev/null
+      rm -rf "$SRC_DIR"
+      continue
+    fi
+    if ! git checkout -b "$branch_name" >> "$perlog" 2>&1; then
+      log "ERROR: git checkout failed for $branch_name for $name (voir $perlog)"
+      cat "$perlog"
+      popd >/dev/null
+      rm -rf "$SRC_DIR"
+      continue
+    fi
+    log "Pushing branch $branch_name to origin..."
+    if ! git push origin "$branch_name" >>"$perlog" 2>&1; then
+      log "ERROR: git push failed for $name (check $perlog pour l'erreur exacte)"
+      cat "$perlog"
+      popd >/dev/null
+      rm -rf "$SRC_DIR"
+      continue
     fi
   else
     # direct push to default branch

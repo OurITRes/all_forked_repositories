@@ -50,3 +50,9 @@ jobs:
             ./scripts/squash_import_to_monorepo.sh forks.yaml --dry-run
           fi
           
+      - name: Upload logs (artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: import-logs
+          path: logs/
+          
