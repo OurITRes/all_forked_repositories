@@ -8,7 +8,7 @@ on:
         required: true
         default: 'dry-run'
   schedule:
-    - cron: '0 4 * * *' # daily at 04:00 UTC (adjust as needed)
+    - cron: '0 4 * * *'
 
 permissions:
   contents: write
@@ -36,42 +36,51 @@ jobs:
       - name: Install Python deps
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
 
+      - name: Clean logs directory (avoid scanning old logs)
+        run: |
+          mkdir -p logs
+          rm -rf logs/* || true
+
       - name: Prepare and run import
         id: run_import
         env:
-          # Do NOT rely on a long-lived classic PAT here inside Actions.
-          # We intentionally prefer the runtime token (GITHUB_TOKEN) via github.token.
-          # If you want to use a custom PAT, set the repo secret FORKS_MANAGER_PAT,
-          # but note org policies may reject long-lived classic tokens.
           FORKS_MANAGER_PAT: ${{ secrets.FORKS_MANAGER_PAT }}
           GITHUB_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -o pipefail
           chmod +x scripts/squash_import_to_monorepo.sh
+          LOGFILE="logs/run-output-${RUN_ID}.log"
           if [ "${{ github.event.inputs.run_mode || 'dry-run' }}" = "real" ]; then
-            echo "Running REAL import: will create PRs (--pr)."
-            ./scripts/squash_import_to_monorepo.sh forks.yaml --pr 2>&1 | tee logs/run-output-${{ github.run_id }}.log
+            echo "Running REAL import: will create PRs (--pr)." | tee -a "$LOGFILE"
+            ./scripts/squash_import_to_monorepo.sh forks.yaml --pr 2>&1 | tee -a "$LOGFILE"
           else
-            echo "Running DRY-RUN (no push / PR / delete)."
-            ./scripts/squash_import_to_monorepo.sh forks.yaml --dry-run 2>&1 | tee logs/run-output-${{ github.run_id }}.log
+            echo "Running DRY-RUN (no push / PR / delete)." | tee -a "$LOGFILE"
+            ./scripts/squash_import_to_monorepo.sh forks.yaml --dry-run 2>&1 | tee -a "$LOGFILE"
           fi
 
-      - name: Scan logs for ERRORs / push failures
+      - name: Scan current-run logs for ERRORs / push failures
         if: always()
+        env:
+          RUN_ID: ${{ github.run_id }}
         run: |
           set -e
-          # Look for common failure markers in logs produced by the script
-          echo "Scanning logs for errors..."
-          mkdir -p scan_out
-          grep -R --line-number --color=never -E "ERROR:|fatal:|remote: The 'OurITRes' organization forbids access|Permission to ${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}" logs/ || true
-          # return non-zero if any error lines matched
-          ERRCOUNT=$(grep -R -E "ERROR:|fatal:|remote: The 'OurITRes' organization forbids access|Permission to ${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}" logs/ | wc -l || true)
-          echo "Detected $ERRCOUNT matching error lines"
+          echo "Scanning current-run logfile and per-repo logs for errors..."
+          LOGFILE="logs/run-output-${RUN_ID}.log"
+          # Search only in the main run output plus per-repo logs created during this run (same timestamp)
+          # Grep for common error markers
+          echo "Searching $LOGFILE"
+          grep -n -E "ERROR:|fatal:|remote: The 'OurITRes' organization forbids access|Permission to OurITRes/${{ github.repository }}" "$LOGFILE" || true
+          # Also scan any per-repo logs created in this run (they contain the current date prefix matching the run time).
+          # We'll examine logs/*${RUN_ID}* and logs/*-$(date -u +%Y%m%d)-*.log as a broad but limited set.
+          # (Most per-repo logs include the global DATESTR; scanning entire logs/ is safe because we cleared it earlier.)
+          ERRCOUNT=$(grep -R -n -E "ERROR:|fatal:|remote: The 'OurITRes' organization forbids access|Permission to OurITRes/${{ github.repository }}" logs/ | wc -l || true)
+          echo "Detected $ERRCOUNT matching error lines in current logs"
           if [ "$ERRCOUNT" -gt 0 ]; then
-            echo "ERRORS found in logs; failing workflow so you can inspect artifacts."
+            echo "ERRORS found in current-run logs; failing workflow so you can inspect artifacts."
             exit 1
           fi
-          echo "No error markers found in logs."
+          echo "No error markers found in current-run logs."
 
       - name: Upload logs (artifacts)
         if: always()
