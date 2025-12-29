@@ -1,0 +1,245 @@
+[
+  {
+    "source": "OurITRes/Git-Auto-Deploy",
+    "owner": "OurITRes",
+    "name": "Git-Auto-Deploy",
+    "default_branch": "master",
+    "upstream": "olipo186/Git-Auto-Deploy",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/python/Git-Auto-Deploy",
+    "url": "https://github.com/OurITRes/Git-Auto-Deploy"
+  },
+  {
+    "source": "OurITRes/Tier0-User-Management",
+    "owner": "OurITRes",
+    "name": "Tier0-User-Management",
+    "default_branch": "main",
+    "upstream": "Kili69/Tier0-User-Management",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/tiering/obsolete/Tier0-User-Management",
+    "url": "https://github.com/OurITRes/Tier0-User-Management"
+  },
+  {
+    "source": "OurITRes/AD-Security-PingCastle",
+    "owner": "OurITRes",
+    "name": "AD-Security-PingCastle",
+    "default_branch": "master",
+    "upstream": "netwrix/pingcastle",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/netwrix/pingcastle",
+    "url": "https://github.com/OurITRes/AD-Security-PingCastle"
+  },
+  {
+    "source": "OurITRes/Modern_ActiveDirectory",
+    "owner": "OurITRes",
+    "name": "Modern_ActiveDirectory",
+    "default_branch": "main",
+    "upstream": "dakhama-mehdi/Modern_ActiveDirectory",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/board/obsolete/Modern_ActiveDirectory",
+    "url": "https://github.com/OurITRes/Modern_ActiveDirectory"
+  },
+  {
+    "source": "OurITRes/ADTimeline",
+    "owner": "OurITRes",
+    "name": "ADTimeline",
+    "default_branch": "master",
+    "upstream": "ANSSI-FR/ADTimeline",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/adds/replication/ADTimeline",
+    "url": "https://github.com/OurITRes/ADTimeline"
+  },
+  {
+    "source": "OurITRes/zjorz-Public-AD-Scripts",
+    "owner": "OurITRes",
+    "name": "zjorz-Public-AD-Scripts",
+    "default_branch": "master",
+    "upstream": "zjorz/Public-AD-Scripts",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/adds/zjorz-Public-AD-Scripts",
+    "url": "https://github.com/OurITRes/zjorz-Public-AD-Scripts"
+  },
+  {
+    "source": "OurITRes/securedworkstation",
+    "owner": "OurITRes",
+    "name": "securedworkstation",
+    "default_branch": "master",
+    "upstream": "Azure/securedworkstation",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/intune/securedworkstation",
+    "url": "https://github.com/OurITRes/securedworkstation"
+  },
+  {
+    "source": "OurITRes/DSInternals",
+    "owner": "OurITRes",
+    "name": "DSInternals",
+    "default_branch": "master",
+    "upstream": "MichaelGrafnetter/DSInternals",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/adds/DSInternals",
+    "url": "https://github.com/OurITRes/DSInternals"
+  },
+  {
+    "source": "OurITRes/Automated-Infra-PowerShell",
+    "owner": "OurITRes",
+    "name": "Automated-Infra-PowerShell",
+    "default_branch": "master",
+    "upstream": "farismalaeb/Powershell",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/dev/automation/Automated-Infra-PowerShell",
+    "url": "https://github.com/OurITRes/Automated-Infra-PowerShell"
+  },
+  {
+    "source": "OurITRes/SysAdmin-Tools",
+    "owner": "OurITRes",
+    "name": "SysAdmin-Tools",
+    "default_branch": "master",
+    "upstream": "chrisdee/Tools",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/SysAdmin-Tools",
+    "url": "https://github.com/OurITRes/SysAdmin-Tools"
+  },
+  {
+    "source": "OurITRes/docs-guide",
+    "owner": "OurITRes",
+    "name": "docs-guide",
+    "default_branch": "base",
+    "upstream": "RockefellerArchiveCenter/docs-guide",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/docs/content/docs-guide",
+    "url": "https://github.com/OurITRes/docs-guide"
+  },
+  {
+    "source": "OurITRes/AD-Objects-ADACLScanner",
+    "owner": "OurITRes",
+    "name": "AD-Objects-ADACLScanner",
+    "default_branch": "master",
+    "upstream": "canix1/ADACLScanner",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/adds/AD-Objects-ADACLScanner",
+    "url": "https://github.com/OurITRes/AD-Objects-ADACLScanner"
+  },
+  {
+    "source": "OurITRes/AD-Security-ADControlPaths",
+    "owner": "OurITRes",
+    "name": "AD-Security-ADControlPaths",
+    "default_branch": "master",
+    "upstream": "ANSSI-FR/AD-control-paths",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/adds/AD-Security-ADControlPaths",
+    "url": "https://github.com/OurITRes/AD-Security-ADControlPaths"
+  },
+  {
+    "source": "OurITRes/JEA",
+    "owner": "OurITRes",
+    "name": "JEA",
+    "default_branch": "master",
+    "upstream": "PowerShell/JEA",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/adds/JEA",
+    "url": "https://github.com/OurITRes/JEA"
+  },
+  {
+    "source": "OurITRes/ActiveDirectoryTools",
+    "owner": "OurITRes",
+    "name": "ActiveDirectoryTools",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/ActiveDirectoryTools",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/ActiveDirectoryTools",
+    "url": "https://github.com/OurITRes/ActiveDirectoryTools"
+  },
+  {
+    "source": "OurITRes/CredentialManager",
+    "owner": "OurITRes",
+    "name": "CredentialManager",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/CredentialManager",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/CredentialManager",
+    "url": "https://github.com/OurITRes/CredentialManager"
+  },
+  {
+    "source": "OurITRes/HostUtilities",
+    "owner": "OurITRes",
+    "name": "HostUtilities",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/HostUtilities",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/HostUtilities",
+    "url": "https://github.com/OurITRes/HostUtilities"
+  },
+  {
+    "source": "OurITRes/BAMCIS.TokenManipulation",
+    "owner": "OurITRes",
+    "name": "BAMCIS.TokenManipulation",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/BAMCIS.TokenManipulation",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/BAMCIS.TokenManipulation",
+    "url": "https://github.com/OurITRes/BAMCIS.TokenManipulation"
+  },
+  {
+    "source": "OurITRes/BAMCIS.Logging",
+    "owner": "OurITRes",
+    "name": "BAMCIS.Logging",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/BAMCIS.Logging",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/BAMCIS.Logging",
+    "url": "https://github.com/OurITRes/BAMCIS.Logging"
+  },
+  {
+    "source": "OurITRes/Win32ScheduledTask",
+    "owner": "OurITRes",
+    "name": "Win32ScheduledTask",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/Win32ScheduledTask",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/Win32ScheduledTask",
+    "url": "https://github.com/OurITRes/Win32ScheduledTask"
+  },
+  {
+    "source": "OurITRes/Hyper-VAdministration",
+    "owner": "OurITRes",
+    "name": "Hyper-VAdministration",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/Hyper-VAdministration",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/Hyper-VAdministration",
+    "url": "https://github.com/OurITRes/Hyper-VAdministration"
+  },
+  {
+    "source": "OurITRes/DnsStig",
+    "owner": "OurITRes",
+    "name": "DnsStig",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/DnsStig",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/DnsStig",
+    "url": "https://github.com/OurITRes/DnsStig"
+  },
+  {
+    "source": "OurITRes/ESAE",
+    "owner": "OurITRes",
+    "name": "ESAE",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/ESAE",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/ESAE",
+    "url": "https://github.com/OurITRes/ESAE"
+  },
+  {
+    "source": "OurITRes/AssetInventory",
+    "owner": "OurITRes",
+    "name": "AssetInventory",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/AssetInventory",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/AssetInventory",
+    "url": "https://github.com/OurITRes/AssetInventory"
+  },
+  {
+    "source": "OurITRes/ActiveDirectoryStig",
+    "owner": "OurITRes",
+    "name": "ActiveDirectoryStig",
+    "default_branch": "master",
+    "upstream": "bamcisnetworks/ActiveDirectoryStig",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/frameworks/BAMCIS/ActiveDirectoryStig",
+    "url": "https://github.com/OurITRes/ActiveDirectoryStig"
+  },
+  {
+    "source": "IamPhilG/Star-Citizen_X56_natural",
+    "owner": "IamPhilG",
+    "name": "Star-Citizen_X56_natural",
+    "default_branch": "master",
+    "upstream": "PaladinTitus/SC_X56",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/Games/Star-Citizen_X56_natural",
+    "url": "https://github.com/IamPhilG/Star-Citizen_X56_natural"
+  },
+  {
+    "source": "IamPhilG/freeCodeGram",
+    "owner": "IamPhilG",
+    "name": "freeCodeGram",
+    "default_branch": "master",
+    "upstream": "coderstape/freeCodeGram",
+    "migrate_to": "https://github.com/OurITRes/all_forked_repositories/tools/laravel/freeCodeGram",
+    "url": "https://github.com/IamPhilG/freeCodeGram"
+  }
+]

@@ -2,9 +2,7 @@
 set -euo pipefail
 
 # import_one_repo.sh <owner/repo> <mode: dry-run|real> [migrate_path]
-# - clones the fork, removes .git, copies files into monorepo path (migrate_path or migrate_to from forks.yaml)
-# - creates branch import/<name>-YYYYMMDD and pushes + creates PR when mode=real
-# - uses GITHUB_TOKEN in Actions by default or FORKS_MANAGER_PAT if set locally
+# Improved: ensures destination parent directories are created inside central repo.
 
 if [[ $# -lt 2 ]]; then
   echo "Usage: $0 owner/repo <dry-run|real> [migrate_path]" >&2
@@ -23,14 +21,10 @@ mkdir -p "$LOGDIR"
 DATESTR="$(date -u +%Y%m%d-%H%M%S)"
 LOGFILE="$LOGDIR/${REPO_FULL//\//_}-$DATESTR.log"
 
-# token preference: prefer GITHUB_TOKEN in Actions, else FORKS_MANAGER_PAT
-if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-  TOKEN="${GITHUB_TOKEN:-${FORKS_MANAGER_PAT:-}}"
-else
-  TOKEN="${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}"
-fi
+# token preference: prefer installation token (FORKS_MANAGER_PAT) if set in env, else GITHUB_TOKEN
+TOKEN="${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}"
 if [[ -z "$TOKEN" && "$MODE" != "dry-run" ]]; then
-  echo "[ERROR] No token available (set FORKS_MANAGER_PAT locally or run in Actions where GITHUB_TOKEN exists)" | tee -a "$LOGFILE"
+  echo "[ERROR] No token available (set FORKS_MANAGER_PAT or run in Actions where GITHUB_TOKEN exists)" | tee -a "$LOGFILE"
   exit 1
 fi
 
@@ -76,7 +70,7 @@ else
   git clone --depth 1 "$SRC_CLONE_URL" "$TMPDIR/src" >>"$LOGFILE" 2>&1
 fi
 
-# Step 2: remove .git (we will copy only working tree)
+# Step 2: remove .git
 echo "[STEP 2] prepare working tree (no .git)" | tee -a "$LOGFILE"
 if [[ "$MODE" == "dry-run" ]]; then
   echo "DRY_RUN: would remove .git and copy files" | tee -a "$LOGFILE"
@@ -93,8 +87,14 @@ else
   git clone --depth 1 "$CENTRAL_CLONE_URL" "$TMPDIR/central" >>"$LOGFILE" 2>&1
   git -C "$TMPDIR/central" config user.name "Forks Manager (automation)"
   git -C "$TMPDIR/central" config user.email "noreply@ouritres.local"
+
+  # create parent dirs and ensure target exists
   mkdir -p "$TMPDIR/central/$(dirname "$dest_rel")"
+  mkdir -p "$TMPDIR/central/$dest_rel"
+
+  # rsync working tree into the destination path inside central repo
   rsync -a --exclude='.git' --delete "$TMPDIR/src"/ "$TMPDIR/central/$dest_rel"/ >>"$LOGFILE" 2>&1
+
   git -C "$TMPDIR/central" add --all "$dest_rel" >>"$LOGFILE" 2>&1 || true
   if git -C "$TMPDIR/central" diff --staged --quiet; then
     echo "No changes to import for $REPO_FULL -> $dest_rel" | tee -a "$LOGFILE"
@@ -112,12 +112,6 @@ else
     echo "Pushed and created PR for $REPO_FULL -> $dest_rel (see logs)" | tee -a "$LOGFILE"
   fi
 fi
-
-# Step 4 (optional): mark for periodic sync (handled by scheduled workflow)
-echo "[STEP 4] (handled by scheduled sync workflow)" | tee -a "$LOGFILE"
-
-# Step 5 (cleanup): deletion is manual via cleanup workflow / dispatch
-echo "[STEP 5] Use cleanup workflow to remove original repo after validation" | tee -a "$LOGFILE"
 
 echo "Done. Log: $LOGFILE"
 if [[ -s "$LOGFILE" ]]; then

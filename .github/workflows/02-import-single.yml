@@ -1,17 +1,46 @@
-name: 02 - Import single fork (step-by-step) with GitHub App auth
+name: 02 - Import single fork (interactive select)
 
 on:
   workflow_dispatch:
     inputs:
       repo_full:
-        description: 'Fork full name (owner/repo) as in forks.yaml (required).'
+        description: 'Select a fork (owner/repo) to import from forks.json'
         required: true
+        type: choice
+        options:
+          - "OurITRes/Git-Auto-Deploy"
+          - "OurITRes/Tier0-User-Management"
+          - "OurITRes/AD-Security-PingCastle"
+          - "OurITRes/Modern_ActiveDirectory"
+          - "OurITRes/ADTimeline"
+          - "OurITRes/zjorz-Public-AD-Scripts"
+          - "OurITRes/securedworkstation"
+          - "OurITRes/DSInternals"
+          - "OurITRes/Automated-Infra-PowerShell"
+          - "OurITRes/SysAdmin-Tools"
+          - "OurITRes/docs-guide"
+          - "OurITRes/AD-Objects-ADACLScanner"
+          - "OurITRes/AD-Security-ADControlPaths"
+          - "OurITRes/JEA"
+          - "OurITRes/ActiveDirectoryTools"
+          - "OurITRes/CredentialManager"
+          - "OurITRes/HostUtilities"
+          - "OurITRes/BAMCIS.TokenManipulation"
+          - "OurITRes/BAMCIS.Logging"
+          - "OurITRes/Win32ScheduledTask"
+          - "OurITRes/Hyper-VAdministration"
+          - "OurITRes/DnsStig"
+          - "OurITRes/ESAE"
+          - "OurITRes/AssetInventory"
+          - "OurITRes/ActiveDirectoryStig"
+          - "IamPhilG/Star-Citizen_X56_natural"
+          - "IamPhilG/freeCodeGram"
       run_mode:
         description: 'dry-run or real (real creates branch + PR)'
         required: true
         default: 'dry-run'
       migrate_path:
-        description: 'Optional: destination path inside monorepo (overrides migrate_to)'
+        description: 'Optional: override destination path inside monorepo'
         required: false
 
 permissions:
@@ -39,7 +68,6 @@ jobs:
           mkdir -p logs
           rm -rf logs/* || true
 
-      # Generate JWT using App private key (script in scripts/app_jwt.py)
       - name: Generate GitHub App JWT
         id: gen_jwt
         env:
@@ -47,25 +75,16 @@ jobs:
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${APP_ID:-}" ] || [ -z "${APP_PRIVATE_KEY:-}" ]; then
-            echo "APP_ID or APP_PRIVATE_KEY secret not set" >&2
-            exit 1
-          fi
           python3 scripts/app_jwt.py > jwt.txt
           JWT=$(cat jwt.txt)
           echo "jwt=$JWT" >> $GITHUB_OUTPUT
 
-      # List installations and extract installation id for OurITRes
       - name: Get GitHub App installation id for OurITRes
         id: get_installation
         env:
           JWT: ${{ steps.gen_jwt.outputs.jwt }}
         run: |
           set -euo pipefail
-          if [ -z "${JWT:-}" ]; then
-            echo "No JWT available" >&2
-            exit 1
-          fi
           curl -s -H "Authorization: Bearer ${JWT}" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations" > installations.json
           INST_ID=$(python3 scripts/get_installation_id.py ouritres < installations.json)
           if [ -z "$INST_ID" ]; then
@@ -76,7 +95,6 @@ jobs:
           fi
           echo "installation_id=$INST_ID" >> $GITHUB_OUTPUT
 
-      # Create installation access token
       - name: Create installation access token
         id: create_token
         env:
@@ -84,41 +102,27 @@ jobs:
           INSTALLATION_ID: ${{ steps.get_installation.outputs.installation_id }}
         run: |
           set -euo pipefail
-          if [ -z "${JWT:-}" ] || [ -z "${INSTALLATION_ID:-}" ]; then
-            echo "Missing JWT or INSTALLATION_ID" >&2
-            exit 1
-          fi
           curl -s -X POST -H "Authorization: Bearer ${JWT}" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" > inst_token.json
           token=$(jq -r .token inst_token.json)
-          expires_at=$(jq -r .expires_at inst_token.json)
           if [ -z "$token" ] || [ "$token" = "null" ]; then
             echo "Failed to create installation token: $(cat inst_token.json)" >&2
             exit 1
           fi
           echo "installation_token=$token" >> $GITHUB_OUTPUT
-          echo "installation_token_expires=${expires_at}" >> $GITHUB_OUTPUT
 
-      - name: Run import for single repo (uses installation token or GITHUB_TOKEN fallback)
+      - name: Run import for single repo (uses installation token)
         env:
           INSTALLATION_TOKEN: ${{ steps.create_token.outputs.installation_token }}
-          GITHUB_TOKEN: ${{ github.token }}
           REPO_FULL: ${{ github.event.inputs.repo_full }}
           RUN_MODE: ${{ github.event.inputs.run_mode }}
           MIGRATE_PATH: ${{ github.event.inputs.migrate_path }}
         run: |
           set -euo pipefail
           mkdir -p logs
-          # Choose token: prefer installation token (GitHub App), else fallback to GITHUB_TOKEN
           if [ -n "${INSTALLATION_TOKEN:-}" ]; then
-            echo "Using GitHub App installation token"
             export FORKS_MANAGER_PAT="${INSTALLATION_TOKEN}"
-          else
-            echo "No installation token found, falling back to GITHUB_TOKEN (may lack org admin rights)"
-            export FORKS_MANAGER_PAT="${GITHUB_TOKEN}"
           fi
-
           chmod +x scripts/import_one_repo.sh
-          # call the import script: args = repo_full, mode, migrate_path
           ./scripts/import_one_repo.sh "${REPO_FULL}" "${RUN_MODE}" "${MIGRATE_PATH:-}" 2>&1 | tee "logs/import-${REPO_FULL//\//_}-${RUN_MODE}.log"
 
       - name: Upload logs (artifact)
