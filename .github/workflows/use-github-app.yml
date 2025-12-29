@@ -1,0 +1,99 @@
+name: Use GitHub App auth (generate installation token)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        description: 'dry-run or real'
+        required: true
+        default: 'dry-run'
+      repo_full:
+        description: 'owner/repo to import (optional)'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  app-auth-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python & jq
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyJWT cryptography requests
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+      - name: Generate JWT (GitHub App)
+        id: gen_jwt
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          python3 scripts/app_jwt.py > jwt.txt
+          JWT=$(cat jwt.txt)
+          echo "jwt=$JWT" >> $GITHUB_OUTPUT
+
+      - name: List App installations and get installation id for OurITRes
+        id: get_inst
+        env:
+          JWT: ${{ steps.gen_jwt.outputs.jwt }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JWT:-}" ]; then
+            echo "No JWT" >&2
+            exit 1
+          fi
+          curl -s -H "Authorization: Bearer ${JWT}" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations" > installations.json
+          INST_ID=$(python3 scripts/get_installation_id.py ouritres < installations.json)
+          if [ -z "$INST_ID" ]; then
+            echo "installation_id=" >> $GITHUB_OUTPUT
+            echo "installation_response=$(jq -c . installations.json)" >> $GITHUB_OUTPUT
+            echo "No installation id for ouritres found" >&2
+            exit 1
+          fi
+          echo "installation_id=$INST_ID" >> $GITHUB_OUTPUT
+
+      - name: Create installation access token
+        id: create_token
+        env:
+          JWT: ${{ steps.gen_jwt.outputs.jwt }}
+          INSTALLATION_ID: ${{ steps.get_inst.outputs.installation_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JWT:-}" ] || [ -z "${INSTALLATION_ID:-}" ]; then
+            echo "Missing JWT or INSTALLATION_ID" >&2
+            exit 1
+          fi
+          curl -s -X POST -H "Authorization: Bearer ${JWT}" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" > inst_token.json
+          token=$(jq -r .token inst_token.json)
+          if [ -z "$token" ] || [ "$token" = "null" ]; then
+            echo "Failed to obtain installation token: $(cat inst_token.json)" >&2
+            exit 1
+          fi
+          echo "installation_token=$token" >> $GITHUB_OUTPUT
+
+      - name: Run import using installation token
+        env:
+          INSTALLATION_TOKEN: ${{ steps.create_token.outputs.installation_token }}
+          RUN_MODE: ${{ github.event.inputs.run_mode }}
+          REPO_FULL: ${{ github.event.inputs.repo_full }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INSTALLATION_TOKEN:-}" ]; then
+            echo "No installation token" >&2
+            exit 1
+          fi
+          export FORKS_MANAGER_PAT="${INSTALLATION_TOKEN}"
+          if [ -n "${REPO_FULL}" ]; then
+            chmod +x scripts/import_one_repo.sh
+            ./scripts/import_one_repo.sh "${REPO_FULL}" "${RUN_MODE}"
+          else
+            echo "No REPO_FULL given; nothing to import."
+          fi
