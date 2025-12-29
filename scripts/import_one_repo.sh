@@ -21,10 +21,10 @@ mkdir -p "$LOGDIR"
 DATESTR="$(date -u +%Y%m%d-%H%M%S)"
 LOGFILE="$LOGDIR/${REPO_FULL//\//_}-$DATESTR.log"
 
-# token preference: prefer installation token (FORKS_MANAGER_PAT) if set in env, else GITHUB_TOKEN
-TOKEN="${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}"
+# token preference: prefer GITHUB_TOKEN if set in env, else FORKS_MANAGER_PAT
+TOKEN="${GITHUB_TOKEN:-${FORKS_MANAGER_PAT:-}}"
 if [[ -z "$TOKEN" && "$MODE" != "dry-run" ]]; then
-  echo "[ERROR] No token available (set FORKS_MANAGER_PAT or run in Actions where GITHUB_TOKEN exists)" | tee -a "$LOGFILE"
+  echo "[ERROR] No token available (set GITHUB_TOKEN or FORKS_MANAGER_PAT or run in Actions where GITHUB_TOKEN exists)" | tee -a "$LOGFILE"
   exit 1
 fi
 
@@ -78,17 +78,15 @@ else
   rm -rf "$TMPDIR/src/.git"
 fi
 
-# Step 3: clone central repo, copy into dest_rel, commit to branch, push & create PR (or just commit for dry-run)
-echo "[STEP 3] copy into central repo path and create import branch/PR" | tee -a "$LOGFILE"
-if [[ "$MODE" == "dry-run" ]]; then
-  echo "DRY_RUN: would clone central repo $CENTRAL_CLONE_URL and copy files to $dest_rel" | tee -a "$LOGFILE"
-  echo "DRY_RUN: would create branch import/${name}-${DATESTR} and open PR" | tee -a "$LOGFILE"
-else
-  git clone --depth 1 "$CENTRAL_CLONE_URL" "$TMPDIR/central" >>"$LOGFILE" 2>&1
+  # clone central repo using http.extraHeader to authenticate (safer than embedding token in URL)
+  echo "[STEP 3] clone central repo (authenticated) into $TMPDIR/central" | tee -a "$LOGFILE"
+  # Use Authorization header for clone in case the repo is private
+  git -c http.extraHeader="Authorization: Bearer ${TOKEN}" clone --depth 1 "https://github.com/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}.git" "$TMPDIR/central" >>"$LOGFILE" 2>&1
+
   git -C "$TMPDIR/central" config user.name "Forks Manager (automation)"
   git -C "$TMPDIR/central" config user.email "noreply@ouritres.local"
 
-  # create parent dirs and ensure target exists
+  # ensure parent dirs exist inside central repo
   mkdir -p "$TMPDIR/central/$(dirname "$dest_rel")"
   mkdir -p "$TMPDIR/central/$dest_rel"
 
@@ -102,16 +100,22 @@ else
     branch="import/${name}-${DATESTR}"
     git -C "$TMPDIR/central" commit -m "Import ${REPO_FULL} (squashed) into /${dest_rel}" >>"$LOGFILE" 2>&1
     git -C "$TMPDIR/central" checkout -b "$branch" >>"$LOGFILE" 2>&1
-    git -C "$TMPDIR/central" push origin "$branch" >>"$LOGFILE" 2>&1
-    # create PR via API
-    title="Import ${REPO_FULL} (squashed) -> /${dest_rel}"
-    body="Automated import of ${REPO_FULL} into ${REPO_CENTRAL}/${dest_rel} (squashed)."
-    api="https://api.github.com/repos/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}/pulls"
-    payload=$(jq -n --arg t "$title" --arg b "$body" --arg head "${REPO_CENTRAL_OWNER}:$branch" --arg base "main" '{title:$t, body:$b, head:$head, base:$base}')
-    curl -s -H "Authorization: token ${TOKEN}" -H "Accept: application/vnd.github+json" -d "$payload" "$api" >>"$LOGFILE" 2>&1
-    echo "Pushed and created PR for $REPO_FULL -> $dest_rel (see logs)" | tee -a "$LOGFILE"
+
+    # Push using the Authorization header (avoid embedding token in URL)
+    if ! git -C "$TMPDIR/central" -c http.extraHeader="Authorization: Bearer ${TOKEN}" push origin "$branch" >>"$LOGFILE" 2>&1; then
+      echo "ERROR: git push failed for $name (check $LOGFILE for details)" | tee -a "$LOGFILE"
+      # optional: print last 200 lines
+      tail -n 200 "$LOGFILE" || true
+    else
+      # create PR via API using the same TOKEN
+      title="Import ${REPO_FULL} (squashed) -> /${dest_rel}"
+      body="Automated import of ${REPO_FULL} into ${REPO_CENTRAL}/${dest_rel} (squashed)."
+      api="https://api.github.com/repos/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}/pulls"
+      payload=$(jq -n --arg t "$title" --arg b "$body" --arg head "${REPO_CENTRAL_OWNER}:$branch" --arg base "main" '{title:$t, body:$b, head:$head, base:$base}')
+      curl -s -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" -d "$payload" "$api" >>"$LOGFILE" 2>&1
+      echo "Pushed and created PR for $REPO_FULL -> $dest_rel (see logs)" | tee -a "$LOGFILE"
+    fi
   fi
-fi
 
 echo "Done. Log: $LOGFILE"
 if [[ -s "$LOGFILE" ]]; then

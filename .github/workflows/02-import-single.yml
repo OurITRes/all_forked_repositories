@@ -1,4 +1,4 @@
-name: 02 - Import single fork (interactive select)
+name: 02 - Import single fork
 
 on:
   workflow_dispatch:
