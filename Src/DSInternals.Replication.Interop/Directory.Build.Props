@@ -1,0 +1,77 @@
+<Project>
+  <!-- Configure common C++ project properties -->
+  <PropertyGroup>
+    <PlatformToolset>v143</PlatformToolset>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <WindowsTargetPlatformMinVersion>7.0</WindowsTargetPlatformMinVersion>
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <RootNamespace>DSInternals.Replication.Interop</RootNamespace>
+    <TargetName>DSInternals.Replication.Interop</TargetName>
+    <!-- Incremental linking is not supported for mixed native and managed code projects. -->
+    <LinkIncremental>false</LinkIncremental>
+    <!-- Copy C and C++ runtimes to the output directory, from which they will be copied to PowerShell. -->
+    <CopyCppRuntimeToOutputDir>true</CopyCppRuntimeToOutputDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <ConformanceMode>true</ConformanceMode>
+      <WarningLevel>Level3</WarningLevel>
+      <!-- Only managed exceptions are used in the project -->
+      <ExceptionHandling>false</ExceptionHandling>
+      <PreprocessorDefinitions Condition="'$(Platform)'=='Win32'">WIN32;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <!-- Include RPC support -->
+      <AdditionalDependencies>$(CoreLibraryDependencies);%(AdditionalDependencies);Rpcrt4.lib;Secur32.lib</AdditionalDependencies>
+      <TargetMachine Condition="'$(Platform)'=='ARM64'">MachineARM64</TargetMachine>
+    </Link>
+    <!-- Override the MIDL compiler settings -->
+    <Midl>
+      <OutputDirectory>$(MSBuildThisFileDirectory)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <ClientStubFile>%(Filename).cpp</ClientStubFile>
+      <GenerateClientFiles>Stub</GenerateClientFiles>
+      <GenerateServerFiles>None</GenerateServerFiles>
+      <GenerateTypeLibrary>false</GenerateTypeLibrary>
+      <EnableErrorChecks>All</EnableErrorChecks>
+    </Midl>
+  </ItemDefinitionGroup>
+  <PropertyGroup Condition="'$(Configuration)' =='Debug'">
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <!-- Enable code analysis for Debug configuration -->
+    <RunCodeAnalysis>true</RunCodeAnalysis>
+    <EnableMicrosoftCodeAnalysis>true</EnableMicrosoftCodeAnalysis>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' =='Release'">
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <GenerateXMLDocumentationFiles>true</GenerateXMLDocumentationFiles>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <!-- Configure strong name signing if the private key exists -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' AND Exists('$(MSBuildThisFileDirectory)..\..\Keys\DSInternals.Private.snk')">
+    <LinkKeyFile>$(MSBuildThisFileDirectory)..\..\Keys\DSInternals.Private.snk</LinkKeyFile>
+    <LinkDelaySign>false</LinkDelaySign>
+  </PropertyGroup>
+</Project>

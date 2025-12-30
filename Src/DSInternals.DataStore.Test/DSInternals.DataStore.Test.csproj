@@ -1,0 +1,5 @@
+﻿<Project Sdk="MSTest.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\DSInternals.DataStore\DSInternals.DataStore.csproj" />
+  </ItemGroup>
+</Project>
