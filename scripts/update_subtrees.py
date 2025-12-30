@@ -142,7 +142,7 @@ def find_license(prefix: Path) -> Optional[Path]:
 def copy_license(prefix: Path, license_path: Optional[Path]) -> str:
     target = prefix / "UPSTREAM_LICENSE"
     if license_path and license_path.exists():
-        target.write_text(license_path.read_text())
+        target.write_bytes(license_path.read_bytes())
         return f"License synced from {license_path.name} to {target.name}"
     else:
         target.unlink(missing_ok=True)
@@ -211,12 +211,45 @@ def create_pr(repo: str, token: str, head: str, base: str, updates: List[UpdateR
         if resp.status >= 300:
             raise RuntimeError(f"Failed to create PR: {resp.status} {resp.read()}")
 
+def check_large_files(remote: str, branch: str, max_size: int = 100 * 1024 * 1024) -> None:
+    """Fail early if the upstream contains files over GitHub's size limit."""
+
+    listing = run(["git", "ls-tree", "-r", "--long", f"{remote}/{branch}"], capture=True).stdout
+    offenders = []
+    for line in listing.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        try:
+            size = int(parts[3])
+        except ValueError:
+            continue
+        if size > max_size:
+            path = line.split("\t", maxsplit=1)[-1]
+            offenders.append((path, size))
+
+    if offenders:
+        details = ", ".join([f"{path} ({size} bytes)" for path, size in offenders])
+        raise CommandError(
+            f"Upstream has files exceeding {max_size} bytes: {details}. Skipping import to avoid push failures."
+        )
+
+
+def clean_prefix(prefix: str) -> None:
+    """Revert staged/working tree changes for a specific subtree path."""
+
+    run(["git", "reset", "--hard", "HEAD", "--", prefix], check=False)
+    run(["git", "clean", "-fd", "--", prefix], check=False)
+
 
 def process_entry(entry: ForkEntry) -> UpdateResult:
     remote = sanitize_remote_name(entry.name)
     prefix = entry.prefix
     ensure_remote(remote, entry.upstream_url)
     upstream_commit = fetch_remote(remote, entry.default_branch)
+
+    # Fail early if the upstream contains files that cannot be pushed to GitHub.
+    check_large_files(remote, entry.default_branch)
 
     prefix_path = ROOT / prefix
     subtree_exists = prefix_path.exists()
@@ -249,6 +282,7 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             error_msg = f"Failed to update {entry.name}: {exc}"
             print(error_msg)
+            clean_prefix(entry.prefix)
             if token:
                 title = f"Upstream sync failed for {entry.name}"
                 body = f"Automatic subtree update failed for {entry.name}.\n\nError: {exc}\n"
@@ -278,4 +312,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
- 
