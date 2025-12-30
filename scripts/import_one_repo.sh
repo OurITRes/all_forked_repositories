@@ -114,7 +114,7 @@ ENTRIES_FILE="$TMPDIR/tree_entries.jsonl"
 
 set -e
 # iterate files
-cd "$TMPDIR/src"
+cd "$TMPDIR/src" || exit 1
 find . -type f -print0 | while IFS= read -r -d '' file; do
   rel="${file#./}"
   # determine mode (executable)
@@ -123,27 +123,38 @@ find . -type f -print0 | while IFS= read -r -d '' file; do
   else
     mode="100644"
   fi
-  # read and base64-encode content
-  blob_content="$(base64 -w0 "$file")"
-  # create blob
-  resp=$(curl -s -X POST -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" \
-    -d "{\"content\":\"${blob_content}\",\"encoding\":\"base64\"}" \
-    "$REPO_API/git/blobs")
-  blob_sha=$(echo "$resp" | jq -r .sha)
+
+  # create a temporary payload file that contains the JSON for the blob
+  PAYLOAD_FILE="$(mktemp "$TMPDIR/blob_payload_XXXX.json")"
+  # write JSON header, append base64 content (without newlines), then footer
+  printf '%s' '{"content":"' > "$PAYLOAD_FILE"
+  # use base64 -w0 on Linux; if not supported, fallback to tr to remove newlines
+  if base64 --wrap=0 /dev/null >/dev/null 2>&1; then
+    base64 -w0 "$file" >> "$PAYLOAD_FILE"
+  else
+    base64 "$file" | tr -d '\n' >> "$PAYLOAD_FILE"
+  fi
+  printf '%s' '","encoding":"base64"}' >> "$PAYLOAD_FILE"
+
+  # send payload reading from file (avoids Arg list too long)
+  resp="$(curl -s -X POST -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" --data-binary @"$PAYLOAD_FILE" "$REPO_API/git/blobs")"
+  rm -f "$PAYLOAD_FILE" || true
+
+  blob_sha="$(echo "$resp" | jq -r .sha)"
   if [[ -z "$blob_sha" || "$blob_sha" == "null" ]]; then
     echo "ERROR: failed to create blob for $file. Response: $resp" | tee -a "$LOGFILE"
     exit 1
   fi
-  # construct path inside monorepo
+
   dst_path="${dest_rel}/${rel}"
-  # escape JSON safely using jq -Rn --arg ... trick
   entry_json=$(jq -n --arg path "$dst_path" --arg mode "$mode" --arg type "blob" --arg sha "$blob_sha" \
     '{path:$path, mode:$mode, type:$type, sha:$sha}')
   printf '%s\n' "$entry_json" >> "$ENTRIES_FILE"
+
   echo "Created blob $blob_sha for $file -> $dst_path" | tee -a "$LOGFILE"
 done
 
-cd - >/dev/null
+cd - >/dev/null  || true
 
 # Build tree payload: a JSON object {"tree":[...entries...]}
 TREE_PAYLOAD="$TMPDIR/tree_payload.json"
