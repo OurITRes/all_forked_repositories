@@ -100,6 +100,7 @@ if [[ "$MODE" == "dry-run" ]]; then
   echo "DRY_RUN: would init central repo and copy files to $dest_rel" | tee -a "$LOGFILE"
   echo "DRY_RUN: would create branch import/${name}-${DATESTR} and open PR" | tee -a "$LOGFILE"
 else
+    # --- prepare and authenticate for central repo operations ---
   # create and initialize central working dir
   mkdir -p "$TMPDIR/central"
   pushd "$TMPDIR/central" >/dev/null
@@ -110,39 +111,47 @@ else
   # Prevent interactive credential prompting
   export GIT_TERMINAL_PROMPT=0
 
-  # Try fetch with Authorization header (preferred)
+  # sanitize token again (just in case)
+  TOKEN="$(printf '%s' "${TOKEN:-}" | tr -d '\r\n' | sed -E 's/^[[:space:]\"]+//; s/[[:space:]\"]+$//')"
+
+  # Create temporary ~/.netrc for robust auth (used as reliable fallback by git)
+  NETRC_FILE="${HOME}/.netrc"
+  umask 177
+  printf "machine github.com\n  login x-access-token\n  password %s\n" "${TOKEN}" > "$NETRC_FILE"
+  chmod 600 "$NETRC_FILE"
+  echo "[DEBUG] Created temporary netrc at $NETRC_FILE" >>"$LOGFILE"
+
+  # Try fetch with Authorization header (preferred). If it fails, netrc will allow fallback.
   set +e
   git -c http.extraHeader="Authorization: Bearer ${TOKEN}" fetch --depth=1 origin main >>"$LOGFILE" 2>&1
   rc=$?
   if [[ $rc -ne 0 ]]; then
-    echo "Fetch main failed (rc=$rc), trying to fetch origin HEAD..." | tee -a "$LOGFILE"
+    echo "Fetch main failed (rc=$rc), trying to fetch origin HEAD (netrc fallback may be used)..." | tee -a "$LOGFILE"
     git -c http.extraHeader="Authorization: Bearer ${TOKEN}" fetch --depth=1 origin >>"$LOGFILE" 2>&1 || true
   fi
   set -e
 
-  # Determine a branch to checkout: prefer origin/main, then origin/master, then FETCH_HEAD
+  # Ensure a local branch exists to commit onto and set committer identity before commit
+  # Prefer origin/main, else origin/master, else create an empty main
   if git show-ref --verify --quiet refs/remotes/origin/main; then
     git checkout -b main origin/main >>"$LOGFILE" 2>&1 || true
   elif git show-ref --verify --quiet refs/remotes/origin/master; then
     git checkout -b main origin/master >>"$LOGFILE" 2>&1 || true
   else
-    # checkout FETCH_HEAD if present, else create an initial empty main
-    if git rev-parse --verify --quiet FETCH_HEAD >/dev/null 2>&1; then
-      git checkout -b main FETCH_HEAD >>"$LOGFILE" 2>&1 || true
-    else
-      # create initial commit if repo empty
-      git commit --allow-empty -m "Initialize central repo for imports" >>"$LOGFILE" 2>&1 || true
-      git branch -M main >>"$LOGFILE" 2>&1 || true
-    fi
+    # no remote branch available -> create initial empty main
+    git commit --allow-empty -m "Initialize central repo for imports" >>"$LOGFILE" 2>&1 || true
+    git branch -M main >>"$LOGFILE" 2>&1 || true
   fi
 
-  # configure committer
+  # configure committer BEFORE making changes
   git config user.name "Forks Manager (automation)"
   git config user.email "noreply@ouritres.local"
 
-  # ensure parent dirs exist inside central repo
+  # ensure parent dirs exist inside central repo and filesystem-level refs dir exists
   mkdir -p "$(dirname "$dest_rel")"
   mkdir -p "$dest_rel"
+  # ensure git remote refs dir exists to avoid "unable to create directory" races
+  mkdir -p .git/refs/remotes/origin || true
 
   # sync working tree into destination
   rsync -a --exclude='.git' --delete "$TMPDIR/src"/ "$dest_rel"/ >>"$LOGFILE" 2>&1
@@ -156,7 +165,7 @@ else
     git commit -m "Import ${REPO_FULL} (squashed) into /${dest_rel}" >>"$LOGFILE" 2>&1
     git checkout -b "$branch" >>"$LOGFILE" 2>&1
 
-    # Attempt push using Authorization header
+    # push using Authorization header first, fallback to netrc if needed
     set +e
     git -c http.extraHeader="Authorization: Bearer ${TOKEN}" push origin "$branch" >>"$LOGFILE" 2>&1
     PUSH_RC=$?
@@ -164,21 +173,14 @@ else
 
     if [[ $PUSH_RC -ne 0 ]]; then
       echo "Push with http.extraHeader failed (rc=$PUSH_RC). Trying netrc fallback..." | tee -a "$LOGFILE"
-      # Fallback: create ~/.netrc for token auth (machine github.com login x-access-token password <token>)
-      NETRC_FILE="${HOME}/.netrc"
-      umask 177
-      printf "machine github.com\n  login x-access-token\n  password %s\n" "${TOKEN}" > "$NETRC_FILE"
-      chmod 600 "$NETRC_FILE"
-      # Try push again (without extra header)
-      git push origin "$branch" >>"$LOGFILE" 2>&1 || {
-        echo "Fallback push also failed. See $LOGFILE for details." | tee -a "$LOGFILE"
-        # cleanup netrc
+      # Try push again (netrc in place)
+      if ! git push origin "$branch" >>"$LOGFILE" 2>&1; then
+        echo "Fallback push failed as well. See $LOGFILE for details." | tee -a "$LOGFILE"
+        # cleanup netrc and abort
         rm -f "$NETRC_FILE" || true
         popd >/dev/null
         exit 1
-      }
-      # cleanup netrc
-      rm -f "$NETRC_FILE" || true
+      fi
     fi
 
     # create PR via API using the same token
@@ -189,6 +191,9 @@ else
     curl -s -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" -d "$payload" "$api" >>"$LOGFILE" 2>&1
     echo "Pushed and created PR for $REPO_FULL -> $dest_rel (see logs)" | tee -a "$LOGFILE"
   fi
+
+  # cleanup netrc
+  rm -f "$NETRC_FILE" || true
 
   popd >/dev/null
 fi
