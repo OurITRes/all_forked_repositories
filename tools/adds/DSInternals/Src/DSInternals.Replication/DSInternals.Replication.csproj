@@ -1,0 +1,50 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <!-- NuGet package metadata -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <Version>6.2</Version>
+    <AssemblyTitle>DSInternals Replication Library</AssemblyTitle>
+    <Title>$(AssemblyTitle)</Title>
+    <Description>DSInternals Replication implements a client for the Active Directory Replication Service Remote Protocol (DRS-R). It can be used to remotely extract password hashes from domain controllers.</Description>
+    <PackageReleaseNotes>- Updated dependencies.</PackageReleaseNotes>
+    <PackageTags>ActiveDirectory Security Replication RPC DRSR DCSync</PackageTags>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);CopyPrivateProjectReferencesToPackage</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.CsWin32">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DSInternals.Common\DSInternals.Common.csproj" />
+    <ProjectReference Include="..\DSInternals.Replication.Interop\NetCore\DSInternals.Replication.Interop.NetCore.vcxproj" Condition="'$(TargetFramework)' != 'net48'">
+      <!-- Do not include a reference to this project in the NuGet package -->
+      <PrivateAssets>all</PrivateAssets>
+    </ProjectReference>
+    <ProjectReference Include="..\DSInternals.Replication.Interop\NetFramework\DSInternals.Replication.Interop.NetFramework.vcxproj" Condition="'$(TargetFramework)' == 'net48'">
+      <!-- Do not include a reference to this project in the NuGet package -->
+      <PrivateAssets>all</PrivateAssets>
+    </ProjectReference>
+    <ProjectReference Include="..\DSInternals.Replication.Model\DSInternals.Replication.Model.csproj">
+      <!-- Do not include a reference to this project in the NuGet package -->
+      <PrivateAssets>all</PrivateAssets>
+    </ProjectReference>
+  </ItemGroup>
+
+    <!-- Include the files in the NuGet package directly -->
+    <Target DependsOnTargets="BuildOnlySettings;ResolveReferences" Name="CopyPrivateProjectReferencesToPackage">
+      <ItemGroup>
+        <!-- DSInternals.Replication.Interop and DSInternals.Replication.Model dll+xml+pdb -->
+        <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths-&gt;WithMetadataValue('PrivateAssets', 'all'))" />
+        <!-- .NET IJW host -->
+        <BuildOutputInPackage Include="$(OutputPath)Ijwhost.dll" Condition="'$(TargetFramework)' != 'net48'" />
+      </ItemGroup>
+    </Target>
+</Project>
