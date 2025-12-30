@@ -3,7 +3,6 @@ set -euo pipefail
 
 # import_one_repo.sh <owner/repo> <mode: dry-run|real> [migrate_path]
 # Robust import script using GitHub App installation token (or fallback)
-# Ensures destination parent directories are created and uses safe auth for git operations.
 
 if [[ $# -lt 2 ]]; then
   echo "Usage: $0 owner/repo <dry-run|real> [migrate_path]" >&2
@@ -23,7 +22,6 @@ DATESTR="$(date -u +%Y%m%d-%H%M%S)"
 LOGFILE="$LOGDIR/${REPO_FULL//\//_}-$DATESTR.log"
 
 # token preference: prefer installation token (workflow), then FORKS_MANAGER_PAT, then GITHUB_TOKEN
-# INSTALLATION_TOKEN is expected to be provided by the workflow environment
 TOKEN="${INSTALLATION_TOKEN:-${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}}"
 # sanitize token: remove CR/LF and surrounding whitespace/quotes
 TOKEN="$(printf '%s' "$TOKEN" | tr -d '\r\n' | sed -E 's/^[[:space:]\"]+//; s/[[:space:]\"]+$//')"
@@ -38,21 +36,26 @@ echo "=== Importing $REPO_FULL mode=$MODE at $DATESTR ===" | tee -a "$LOGFILE"
 owner="$(echo "$REPO_FULL" | cut -d/ -f1)"
 name="$(echo "$REPO_FULL" | cut -d/ -f2)"
 
-# parse forks.yaml to find migrate_to/default_branch if available
-migrate_to="$(python3 - <<'PY'
-import yaml,sys
+# --- get migrate_to using a small temporary python helper to avoid heredoc/subshell parsing issues ---
+GETPY="$(mktemp -t get_migrate_XXXX.py)"
+cat > "$GETPY" <<'PY'
+import yaml, sys
+repo_full = sys.argv[1]
+name = sys.argv[2]
 try:
-    y=yaml.safe_load(open('forks.yaml'))
+    y = yaml.safe_load(open('forks.yaml'))
 except Exception:
     print('', end='')
     sys.exit(0)
-for f in y.get('forks',[]):
-    if f.get('source') == sys.argv[1] or f.get('name') == sys.argv[2] or f.get('repo') == sys.argv[1]:
+for f in y.get('forks', []):
+    if f.get('source') == repo_full or f.get('name') == name or f.get('repo') == repo_full:
         print(f.get('migrate_to') or '')
         sys.exit(0)
 print('', end='')
 PY
-" "$REPO_FULL" "$name")"
+
+migrate_to="$(python3 "$GETPY" "$REPO_FULL" "$name" 2>/dev/null || true)"
+rm -f "$GETPY" || true
 
 if [[ -n "$MIGRATE_OVERRIDE" ]]; then
   dest_rel="$MIGRATE_OVERRIDE"
@@ -66,6 +69,7 @@ elif [[ -n "$migrate_to" ]]; then
 else
   dest_rel="$name"
 fi
+
 # sanitize dest_rel (remove accidental quotes/spaces and leading/trailing slashes)
 dest_rel="$(echo "$dest_rel" | sed -E 's/^[[:space:]\"]+//; s/[[:space:]\"]+$//; s#^/##; s#/$##')"
 
@@ -112,11 +116,7 @@ else
   rc=$?
   if [[ $rc -ne 0 ]]; then
     echo "Fetch main failed (rc=$rc), trying to fetch origin HEAD..." | tee -a "$LOGFILE"
-    git -c http.extraHeader="Authorization: Bearer ${TOKEN}" fetch --depth=1 origin >>"$LOGFILE" 2>&1
-    rc2=$?
-    if [[ $rc2 -ne 0 ]]; then
-      echo "Fetch fallback also failed (rc=$rc2). Capturing fetch debug output..." | tee -a "$LOGFILE"
-    fi
+    git -c http.extraHeader="Authorization: Bearer ${TOKEN}" fetch --depth=1 origin >>"$LOGFILE" 2>&1 || true
   fi
   set -e
 
