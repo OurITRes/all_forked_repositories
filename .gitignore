@@ -1,1 +1,21 @@
+# Local-only files and scratch space used during subtree runs
 norun/
+
+# Common dependency/build artefacts we do not track in this read-only mirror
+node_modules/
+vendor/
+venv/
+.venv/
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+npm-debug.log*
+yarn-error.log*
+dist/
+build/
+coverage/
+.DS_Store
+.idea/
+.vscode/
