@@ -1,0 +1,76 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Target both Windows PowerShell 5 and PowerShell 7 -->
+    <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
+    <!-- Redirect the build directory so that it includes the module name -->
+    <ArtifactsPivots>$(Configuration)/DSInternals/$(TargetFramework)</ArtifactsPivots>
+    <IncludeSymbols>False</IncludeSymbols>
+    <Version>6.2</Version>
+    <AssemblyTitle>DSInternals PowerShell Commands</AssemblyTitle>
+    <!-- Copy all dependency DLLs to the binary module -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <!-- XML documentation files are not needed for PowerShell binary modules -->
+    <GenerateDocumentationFile>False</GenerateDocumentationFile>
+    <!-- Do not generate the *.deps.json file, which is not needed by PowerShell Core -->
+    <GenerateDependencyFile>False</GenerateDependencyFile>
+    <!-- Skip copying XML files from the referenced projects -->
+    <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Include platform-independent module files in the module root directory -->
+    <Content Include="*.psd1;*.psm1;**\*.ps1xml;License.txt;*\*.txt;*\*.*Help.xml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>../%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </Content>
+    <!-- Show MarkDown documentation files -->
+    <None Include="$(MSBuildThisFileDirectory)../../Documentation/PowerShell/*.md">
+      <Link>Documentation/Commands/%(Filename)%(Extension)</Link>
+    </None>
+    <None Include="$(MSBuildThisFileDirectory)../../Documentation/*.md">
+      <Link>Documentation/%(Filename)%(Extension)</Link>
+    </None>
+    <None Include="$(MSBuildThisFileDirectory)../../.github/*.md">
+      <Link>Documentation/%(Filename)%(Extension)</Link>
+    </None>
+    <!-- Display the build scripts as part of the PowerShell project -->
+    <None Include="$(MSBuildThisFileDirectory)../../Scripts/*.*">
+      <Link>Scripts/%(Filename)%(Extension)</Link>
+    </None>
+    <!-- Pack the script template as an embedded resource -->
+    <None Remove="ADDBRestoreFromMediaScriptTemplate.ps1" />
+    <EmbeddedResource Include="ADDBRestoreFromMediaScriptTemplate.ps1" />
+    <!-- Distribute basic integrity checks with the module -->
+    <None Remove="Integrity.Tests.ps1" />
+    <Content Include="Integrity.Tests.ps1">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>../Integrity.Tests.ps1</TargetPath>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Reference assemblies that are bundled with PowerShell -->
+    <PackageReference Include="PowerShellStandard.Library" IncludeAssets="compile" />
+
+    <ProjectReference Include="..\DSInternals.Common\DSInternals.Common.csproj" />
+    <ProjectReference Include="..\DSInternals.ADSI\DSInternals.ADSI.csproj" />
+    <ProjectReference Include="..\DSInternals.Datastore\DSInternals.Datastore.csproj" />
+    <ProjectReference Include="..\DSInternals.Replication.Model\DSInternals.Replication.Model.csproj" />
+    <ProjectReference Include="..\DSInternals.Replication\DSInternals.Replication.csproj" />
+    <ProjectReference Include="..\DSInternals.SAM\DSInternals.SAM.csproj" />
+
+    <!-- The following dependency from DSInternals.ADSI is already bundled with PowerShell Core -->
+    <PackageReference Include="System.DirectoryServices" Condition="'$(TargetFramework)' != 'net48'" IncludeAssets="compile" />
+
+    <!-- The following dependencies from DSInternals.Common are already bundled with PowerShell Desktop on Windows Server 2025, but are absent on Windows Server 2008 R2: -->
+    <!-- System.Memory, System.Numerics.Vectors, System.Buffers, System.Runtime.CompilerServices.Unsafe -->
+  </ItemGroup>
+  <Target Name="RemoveRootInteropDll" AfterTargets="Build">
+    <!-- TODO: Find a more elegant way of not including these 3 files. -->
+    <!-- Remove DSInternals.Replication.Interop DLL and PDB from module root. Only keep it in the architecture-specific subdirectory. -->
+    <Delete Files="$(OutDir)DSInternals.Replication.Interop.dll" />
+    <Delete Files="$(OutDir)DSInternals.Replication.Interop.pdb" />
+    <!-- Remove the .NET IJW host from module root. Only keep it in the architecture-specific subdirectory. -->
+    <Delete Files="$(OutDir)Ijwhost.dll" />
+  </Target>
+</Project>
