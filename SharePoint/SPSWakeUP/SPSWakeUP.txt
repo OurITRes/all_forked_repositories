@@ -1,0 +1,9 @@
+== SPSWakeUP ==
+
+URLs: 
+
+https://spswakeup.codeplex.com
+
+https://spswakeup.codeplex.com/documentation
+
+Version: SPSWakeUP 1.7 | Released: Sep 19, 2014
