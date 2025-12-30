@@ -67,6 +67,15 @@ def run(cmd: List[str], cwd: Optional[Path] = None, check: bool = True, capture:
     return result
 
 
+def ref_exists(ref: str) -> bool:
+    return run(["git", "rev-parse", "--verify", "--quiet", ref], check=False).returncode == 0
+
+
+def remote_exists(name: str) -> bool:
+    remotes = run(["git", "remote"], capture=True).stdout
+    return remotes is not None and name in remotes.split()
+
+
 def load_entries() -> List[ForkEntry]:
     data = json.loads(FORKS_FILE.read_text())
     entries: List[ForkEntry] = []
@@ -114,6 +123,15 @@ def default_branch() -> str:
         return ref[-1]
     except CommandError:
         return os.environ.get("DEFAULT_BRANCH", "main")
+
+
+def resolve_base_ref(branch_base: str) -> str:
+    origin_ref = f"origin/{branch_base}"
+    if ref_exists(origin_ref):
+        return origin_ref
+    if ref_exists(branch_base):
+        return branch_base
+    return "HEAD"
 
 
 def subtree_action(prefix: str, remote: str, branch: str, exists: bool) -> None:
@@ -271,7 +289,9 @@ def main() -> int:
 
     branch_base = default_branch()
     update_branch = f"auto/subtree-sync-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
-    run(["git", "checkout", "-B", update_branch, f"origin/{branch_base}"])
+    base_ref = resolve_base_ref(branch_base)
+    print(f"Using base ref {base_ref} for update branch {update_branch}")
+    run(["git", "checkout", "-B", update_branch, base_ref])
 
     for entry in load_entries():
         print(f"Processing {entry.name} -> {entry.prefix}")
@@ -298,9 +318,15 @@ def main() -> int:
     run(["git", "status"])
     run(["git", "add", "."])
     run(["git", "commit", "-m", "chore: sync upstream subtrees"])
-    run(["git", "push", "--set-upstream", "origin", update_branch])
 
-    if token:
+    pushed = False
+    if remote_exists("origin"):
+        run(["git", "push", "--set-upstream", "origin", update_branch])
+        pushed = True
+    else:
+        print("Origin remote not configured; skipping push and PR creation.")
+
+    if token and pushed:
         try:
             create_pr(repo, token, update_branch, branch_base, updates)
         except Exception as exc:  # noqa: BLE001
