@@ -1,0 +1,65 @@
+name: Test and build
+on:
+  push:
+    branches:
+      - master
+      - dev*
+    tags:
+      - v0.*
+      - dv0.*
+
+jobs:
+
+  test:
+    name: Testing
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [2.7, 3.5, 3.8]
+    steps:
+      - uses: actions/checkout@v2
+        name: Check out the repo
+      - uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python-version }}
+          architecture: 'x64'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run tests
+        run: python test/test_parsers.py
+
+  push_to_registry:
+    name: Push "git-auto-deploy" docker image to GitHub Packages
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_PUSH: ${{ startsWith(github.ref, 'refs/tags') || github.ref == 'refs/heads/master' || endsWith(github.ref, '-push') }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v2
+
+      - name: Calculate environments
+        run: |
+          echo IMAGE_REPO=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]') >> $GITHUB_ENV
+          echo IMAGE_TAG=$(./.github/workflows/docker-tag.sh ${{github.ref}}) >> $GITHUB_ENV
+
+      - name: Calculate images full names
+        run: |
+          echo IMAGE=docker.pkg.github.com/$IMAGE_REPO/git-auto-deploy:$IMAGE_TAG >> $GITHUB_ENV
+
+      - name: Login to GitHub Packages Docker Registry
+        run: |
+          docker login docker.pkg.github.com -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        run: |
+          docker build \
+              --rm \
+              -f docker/image-gitautodeploy/Dockerfile \
+              -t $IMAGE \
+              .
+
+      - name: Push to GitHub Packages
+        if: ${{ env.IMAGE_PUSH == 'true' }}
+        run: |
+          docker push $IMAGE
