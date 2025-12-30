@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>6.2</Version>
+    <AssemblyTitle>DSInternals ADSI Library</AssemblyTitle>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DSInternals.Common\DSInternals.Common.csproj" />
+    <PackageReference Include="System.DirectoryServices" Condition="'$(TargetFramework)' != 'net48'" />
+    <!-- Do not use packages for assemblies that are part of .NET Framework -->
+    <Reference Include="System.DirectoryServices" Condition="'$(TargetFramework)' == 'net48'" />
+  </ItemGroup>
+</Project>
