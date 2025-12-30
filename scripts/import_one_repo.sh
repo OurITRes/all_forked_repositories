@@ -2,13 +2,8 @@
 set -euo pipefail
 
 # import_one_repo.sh <owner/repo> <mode: dry-run|real> [migrate_path]
-# Robust import script using GitHub App installation token (or fallback)
-# Key changes:
-# - create ephemeral ~/.netrc early so git operations authenticate non-interactively
-# - use absolute paths for mkdir/rsync to avoid permission issues
-# - configure git user before commit
-# - trap for cleanup of netrc and tempdir
-# - more defensive error handling and logging
+# Implementation that uses GitHub REST API to create blobs/tree/commit/ref and a PR.
+# Advantages: no git auth issues on the runner, robust in CI.
 
 if [[ $# -lt 2 ]]; then
   echo "Usage: $0 owner/repo <dry-run|real> [migrate_path]" >&2
@@ -27,20 +22,18 @@ mkdir -p "$LOGDIR"
 DATESTR="$(date -u +%Y%m%d-%H%M%S)"
 LOGFILE="$LOGDIR/${REPO_FULL//\//_}-$DATESTR.log"
 
-# Ensure cleanup on exit
+# Cleanup handler
 cleanup() {
-  rm -f "${NETRC_FILE:-}" || true
   rm -rf "${TMPDIR:-}" || true
 }
 trap cleanup EXIT
 
-# token preference: prefer installation token (workflow), then FORKS_MANAGER_PAT, then GITHUB_TOKEN
+# Select token (prefer installation token provided by workflow)
 TOKEN="${INSTALLATION_TOKEN:-${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}}"
-# sanitize token: remove CR/LF and surrounding whitespace/quotes
 TOKEN="$(printf '%s' "$TOKEN" | tr -d '\r\n' | sed -E 's/^[[:space:]\"]+//; s/[[:space:]\"]+$//')"
 
 if [[ -z "$TOKEN" && "$MODE" != "dry-run" ]]; then
-  echo "[ERROR] No token available (set INSTALLATION_TOKEN / FORKS_MANAGER_PAT or run in Actions with GITHUB_TOKEN)" | tee -a "$LOGFILE"
+  echo "[ERROR] No token available (set INSTALLATION_TOKEN/FORKS_MANAGER_PAT or run in Actions with GITHUB_TOKEN)" | tee -a "$LOGFILE"
   exit 1
 fi
 
@@ -49,7 +42,7 @@ echo "=== Importing $REPO_FULL mode=$MODE at $DATESTR ===" | tee -a "$LOGFILE"
 owner="$(echo "$REPO_FULL" | cut -d/ -f1)"
 name="$(echo "$REPO_FULL" | cut -d/ -f2)"
 
-# --- get migrate_to using a small temporary python helper to avoid heredoc/subshell parsing issues ---
+# Get migrate_to from forks.yaml (if present) via small python helper
 GETPY="$(mktemp -t get_migrate_XXXX.py)"
 cat > "$GETPY" <<'PY'
 import yaml, sys
@@ -66,14 +59,12 @@ for f in y.get('forks', []):
         sys.exit(0)
 print('', end='')
 PY
-
 migrate_to="$(python3 "$GETPY" "$REPO_FULL" "$name" 2>/dev/null || true)"
 rm -f "$GETPY" || true
 
 if [[ -n "$MIGRATE_OVERRIDE" ]]; then
   dest_rel="$MIGRATE_OVERRIDE"
 elif [[ -n "$migrate_to" ]]; then
-  # if migrate_to is URL extract path after all_forked_repositories/
   if [[ "$migrate_to" =~ ^https?:// ]]; then
     dest_rel="$(echo "$migrate_to" | sed -E 's#.*\/all_forked_repositories\/(.*)#\1#')"
   else
@@ -82,14 +73,11 @@ elif [[ -n "$migrate_to" ]]; then
 else
   dest_rel="$name"
 fi
-
-# sanitize dest_rel (remove accidental quotes/spaces and leading/trailing slashes)
 dest_rel="$(echo "$dest_rel" | sed -E 's/^[[:space:]\"]+//; s/[[:space:]\"]+$//; s#^/##; s#/$##')"
 
 echo "Destination relative path in monorepo: $dest_rel" | tee -a "$LOGFILE"
 
 SRC_CLONE_URL="https://github.com/${REPO_FULL}.git"
-CENTRAL_REMOTE_URL="https://github.com/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}.git"
 
 # Step 1: clone source (shallow)
 echo "[STEP 1] clone source $SRC_CLONE_URL" | tee -a "$LOGFILE"
@@ -99,123 +87,150 @@ else
   git clone --depth 1 "$SRC_CLONE_URL" "$TMPDIR/src" >>"$LOGFILE" 2>&1
 fi
 
-# Step 2: remove .git
+# Step 2: strip .git
 echo "[STEP 2] prepare working tree (no .git)" | tee -a "$LOGFILE"
 if [[ "$MODE" == "dry-run" ]]; then
-  echo "DRY_RUN: would remove .git and copy files" | tee -a "$LOGFILE"
+  echo "DRY_RUN: would remove .git and prepare files" | tee -a "$LOGFILE"
 else
   rm -rf "$TMPDIR/src/.git"
 fi
 
-# Step 3: copy into central repo path and create import branch/PR
-echo "[STEP 3] prepare central repo and sync" | tee -a "$LOGFILE"
-
+# If dry-run, stop here (we already validated clone)
 if [[ "$MODE" == "dry-run" ]]; then
-  echo "DRY_RUN: would init central repo and copy files to $dest_rel" | tee -a "$LOGFILE"
-  echo "DRY_RUN: would create branch import/${name}-${DATESTR} and open PR" | tee -a "$LOGFILE"
+  echo "DRY_RUN completed." | tee -a "$LOGFILE"
+  exit 0
+fi
+
+# Now create blobs and tree entries using GitHub API
+API_BASE="https://api.github.com"
+REPO_API="$API_BASE/repos/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}"
+AUTH_HDR="Authorization: Bearer ${TOKEN}"
+CONTENT_TYPE_HDR="Accept: application/vnd.github+json"
+
+echo "[STEP 3] creating blobs for files under $TMPDIR/src ..." | tee -a "$LOGFILE"
+
+ENTRIES_FILE="$TMPDIR/tree_entries.jsonl"
+: > "$ENTRIES_FILE"
+
+set -e
+# iterate files
+cd "$TMPDIR/src"
+find . -type f -print0 | while IFS= read -r -d '' file; do
+  rel="${file#./}"
+  # determine mode (executable)
+  if [[ -x "$file" ]]; then
+    mode="100755"
+  else
+    mode="100644"
+  fi
+  # read and base64-encode content
+  blob_content="$(base64 -w0 "$file")"
+  # create blob
+  resp=$(curl -s -X POST -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" \
+    -d "{\"content\":\"${blob_content}\",\"encoding\":\"base64\"}" \
+    "$REPO_API/git/blobs")
+  blob_sha=$(echo "$resp" | jq -r .sha)
+  if [[ -z "$blob_sha" || "$blob_sha" == "null" ]]; then
+    echo "ERROR: failed to create blob for $file. Response: $resp" | tee -a "$LOGFILE"
+    exit 1
+  fi
+  # construct path inside monorepo
+  dst_path="${dest_rel}/${rel}"
+  # escape JSON safely using jq -Rn --arg ... trick
+  entry_json=$(jq -n --arg path "$dst_path" --arg mode "$mode" --arg type "blob" --arg sha "$blob_sha" \
+    '{path:$path, mode:$mode, type:$type, sha:$sha}')
+  printf '%s\n' "$entry_json" >> "$ENTRIES_FILE"
+  echo "Created blob $blob_sha for $file -> $dst_path" | tee -a "$LOGFILE"
+done
+
+cd - >/dev/null
+
+# Build tree payload: a JSON object {"tree":[...entries...]}
+TREE_PAYLOAD="$TMPDIR/tree_payload.json"
+jq -s '{tree: .}' "$ENTRIES_FILE" > "$TREE_PAYLOAD"
+
+echo "[STEP 4] determine base branch and parent commit" | tee -a "$LOGFILE"
+# get default_branch of central repo
+repo_info=$(curl -s -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" "$REPO_API")
+default_branch=$(echo "$repo_info" | jq -r .default_branch)
+if [[ -z "$default_branch" || "$default_branch" == "null" ]]; then
+  default_branch="main"
+fi
+echo "Default branch: $default_branch" | tee -a "$LOGFILE"
+
+ref_resp=$(curl -s -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" "$REPO_API/git/ref/heads/$default_branch")
+parent_sha=$(echo "$ref_resp" | jq -r .object.sha // empty)
+if [[ -z "$parent_sha" ]]; then
+  # repo may be empty, treat as no parent
+  parent_sha=""
+  echo "No parent commit found (empty repo?)" | tee -a "$LOGFILE"
 else
-  # create and initialize central working dir
-  mkdir -p "$TMPDIR/central"
-  pushd "$TMPDIR/central" >/dev/null
-
-  git init >>"$LOGFILE" 2>&1
-
-  # configure committer immediately (before any commit)
-  git config user.name "Forks Manager (automation)"
-  git config user.email "noreply@ouritres.local"
-
-  # add remote (no token in URL)
-  git remote add origin "$CENTRAL_REMOTE_URL" >>"$LOGFILE" 2>&1 || true
-
-  # Prevent interactive credential prompting
-  export GIT_TERMINAL_PROMPT=0
-
-  # Create temporary ~/.netrc for robust auth (used by git over HTTPS)
-  NETRC_FILE="${HOME}/.netrc"
-  umask 177
-  printf "machine github.com\n  login x-access-token\n  password %s\n" "${TOKEN}" > "$NETRC_FILE"
-  chmod 600 "$NETRC_FILE"
-  echo "[DEBUG] Created temporary netrc at $NETRC_FILE" >>"$LOGFILE"
-
-  # Optional debug: enable Git/curl traces if DEBUG_GIT=1 in env
-  if [[ "${DEBUG_GIT:-0}" == "1" ]]; then
-    export GIT_TRACE=1
-    export GIT_CURL_VERBOSE=1
-    export GIT_TRACE_PACKET=1
-    export GIT_TRACE_PERFORMANCE=1
-  fi
-
-  # Try fetch (using netrc authentication)
-  set +e
-  git fetch --depth=1 origin main >>"$LOGFILE" 2>&1
-  rc=$?
-  if [[ $rc -ne 0 ]]; then
-    echo "Fetch main failed (rc=$rc), trying to fetch origin HEAD..." | tee -a "$LOGFILE"
-    git fetch --depth=1 origin >>"$LOGFILE" 2>&1 || true
-  fi
-  set -e
-
-  # Determine a branch to checkout: prefer origin/main, then origin/master, then create empty main
-  if git show-ref --verify --quiet refs/remotes/origin/main; then
-    git checkout -b main origin/main >>"$LOGFILE" 2>&1 || true
-  elif git show-ref --verify --quiet refs/remotes/origin/master; then
-    git checkout -b main origin/master >>"$LOGFILE" 2>&1 || true
-  else
-    # create initial empty main
-    git commit --allow-empty -m "Initialize central repo for imports" >>"$LOGFILE" 2>&1 || true
-    git branch -M main >>"$LOGFILE" 2>&1 || true
-  fi
-
-  # ensure parent dirs exist inside central repo using absolute path
-  mkdir -p "$TMPDIR/central/$(dirname "$dest_rel")"
-  mkdir -p "$TMPDIR/central/$dest_rel"
-  # ensure git remote refs dir exists to avoid "unable to create directory" races
-  mkdir -p "$TMPDIR/central/.git/refs/remotes/origin" || true
-
-  # sync working tree into destination (use absolute path)
-  rsync -a --exclude='.git' --delete "$TMPDIR/src"/ "$TMPDIR/central/$dest_rel"/ >>"$LOGFILE" 2>&1
-
-  # stage changes (in central repo)
-  git -C "$TMPDIR/central" add --all "$dest_rel" >>"$LOGFILE" 2>&1 || true
-
-  # If no staged changes, skip commit
-  if git -C "$TMPDIR/central" diff --staged --quiet; then
-    echo "No changes to import for $REPO_FULL -> $dest_rel" | tee -a "$LOGFILE"
-  else
-    branch="import/${name}-${DATESTR}"
-    git -C "$TMPDIR/central" commit -m "Import ${REPO_FULL} (squashed) into /${dest_rel}" >>"$LOGFILE" 2>&1
-    git -C "$TMPDIR/central" checkout -b "$branch" >>"$LOGFILE" 2>&1
-
-    # push (netrc will be used for auth)
-    set +e
-    git -C "$TMPDIR/central" push origin "$branch" >>"$LOGFILE" 2>&1
-    PUSH_RC=$?
-    set -e
-
-    if [[ $PUSH_RC -ne 0 ]]; then
-      echo "Push failed (rc=$PUSH_RC). See $LOGFILE for details." | tee -a "$LOGFILE"
-      rm -f "$NETRC_FILE" || true
-      popd >/dev/null
-      exit 1
-    fi
-
-    # create PR via API using the same token
-    title="Import ${REPO_FULL} (squashed) -> /${dest_rel}"
-    body="Automated import of ${REPO_FULL} into ${REPO_CENTRAL}/${dest_rel} (squashed)."
-    api="https://api.github.com/repos/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}/pulls"
-    payload=$(jq -n --arg t "$title" --arg b "$body" --arg head "${REPO_CENTRAL_OWNER}:$branch" --arg base "main" '{title:$t, body:$b, head:$head, base:$base}')
-    curl -s -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github+json" -d "$payload" "$api" >>"$LOGFILE" 2>&1
-    echo "Pushed and created PR for $REPO_FULL -> $dest_rel (see logs)" | tee -a "$LOGFILE"
-  fi
-
-  # cleanup netrc
-  rm -f "$NETRC_FILE" || true
-
-  popd >/dev/null
+  echo "Parent commit SHA: $parent_sha" | tee -a "$LOGFILE"
 fi
 
-echo "Done. Log: $LOGFILE"
-if [[ -s "$LOGFILE" ]]; then
-  tail -n +1 "$LOGFILE"
+echo "[STEP 5] create tree on GitHub" | tee -a "$LOGFILE"
+tree_resp=$(curl -s -X POST -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" -d @"$TREE_PAYLOAD" "$REPO_API/git/trees")
+tree_sha=$(echo "$tree_resp" | jq -r .sha)
+if [[ -z "$tree_sha" || "$tree_sha" == "null" ]]; then
+  echo "ERROR: failed to create tree. Response: $tree_resp" | tee -a "$LOGFILE"
+  exit 1
 fi
-rm -rf "$TMPDIR"
+echo "Created tree: $tree_sha" | tee -a "$LOGFILE"
+
+echo "[STEP 6] create commit" | tee -a "$LOGFILE"
+commit_payload=$(jq -n --arg msg "Import ${REPO_FULL} (squashed) into /${dest_rel}" --arg tree "$tree_sha" \
+  --argjson parents "$(jq -n '[env.PARENT]' 2>/dev/null || jq -n '[]')" \
+  '{
+    message: $msg,
+    tree: $tree
+  }')
+# construct parents array properly
+if [[ -n "$parent_sha" ]]; then
+  commit_payload=$(jq -n --arg msg "Import ${REPO_FULL} (squashed) into /${dest_rel}" --arg tree "$tree_sha" --arg parent "$parent_sha" \
+    '{message:$msg, tree:$tree, parents:[$parent]}')
+fi
+
+commit_resp=$(curl -s -X POST -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" -d "$commit_payload" "$REPO_API/git/commits")
+commit_sha=$(echo "$commit_resp" | jq -r .sha)
+if [[ -z "$commit_sha" || "$commit_sha" == "null" ]]; then
+  echo "ERROR: failed to create commit. Response: $commit_resp" | tee -a "$LOGFILE"
+  exit 1
+fi
+echo "Created commit: $commit_sha" | tee -a "$LOGFILE"
+
+# create a unique branch name
+branch="import/${name}-${DATESTR}"
+# attempt to create the ref, if already exists, append random suffix
+create_ref_payload=$(jq -n --arg ref "refs/heads/$branch" --arg sha "$commit_sha" '{ref:$ref, sha:$sha}')
+ref_resp=$(curl -s -X POST -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" -d "$create_ref_payload" "$REPO_API/git/refs")
+ref_err_message=$(echo "$ref_resp" | jq -r .message // empty)
+if [[ -n "$ref_err_message" && "$ref_err_message" != "null" ]]; then
+  echo "Warning: creating ref failed ($ref_err_message). Trying alternative branch name..." | tee -a "$LOGFILE"
+  suffix=$(head -c6 /dev/urandom | od -An -tx1 | tr -d ' \n')
+  branch="import/${name}-${DATESTR}-${suffix}"
+  create_ref_payload=$(jq -n --arg ref "refs/heads/$branch" --arg sha "$commit_sha" '{ref:$ref, sha:$sha}')
+  ref_resp=$(curl -s -X POST -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" -d "$create_ref_payload" "$REPO_API/git/refs")
+  ref_err_message=$(echo "$ref_resp" | jq -r .message // empty)
+  if [[ -n "$ref_err_message" && "$ref_err_message" != "null" ]]; then
+    echo "ERROR: could not create branch ref. Response: $ref_resp" | tee -a "$LOGFILE"
+    exit 1
+  fi
+fi
+echo "Created branch: $branch" | tee -a "$LOGFILE"
+
+echo "[STEP 7] create Pull Request" | tee -a "$LOGFILE"
+pr_title="Import ${REPO_FULL} -> /${dest_rel}"
+pr_body="Automated import of ${REPO_FULL} into ${REPO_CENTRAL_OWNER}/${dest_rel} (squashed).\n\nGenerated by import script."
+pr_payload=$(jq -n --arg title "$pr_title" --arg body "$pr_body" --arg head "${REPO_CENTRAL_OWNER}:$branch" --arg base "$default_branch" '{title:$title, body:$body, head:$head, base:$base}')
+pr_resp=$(curl -s -X POST -H "$AUTH_HDR" -H "$CONTENT_TYPE_HDR" -d "$pr_payload" "$REPO_API/pulls")
+pr_url=$(echo "$pr_resp" | jq -r .html_url // empty)
+pr_number=$(echo "$pr_resp" | jq -r .number // empty)
+if [[ -z "$pr_url" || "$pr_url" == "null" ]]; then
+  echo "ERROR: PR creation failed. Response: $pr_resp" | tee -a "$LOGFILE"
+  exit 1
+fi
+
+echo "PR created: $pr_url (#${pr_number})" | tee -a "$LOGFILE"
+echo "Done. Log: $LOGFILE" | tee -a "$LOGFILE"
+# print final lines of the log for quick feedback
+tail -n 200 "$LOGFILE" || true
