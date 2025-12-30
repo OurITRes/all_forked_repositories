@@ -3,6 +3,12 @@ set -euo pipefail
 
 # import_one_repo.sh <owner/repo> <mode: dry-run|real> [migrate_path]
 # Robust import script using GitHub App installation token (or fallback)
+# Key changes:
+# - create ephemeral ~/.netrc early so git operations authenticate non-interactively
+# - use absolute paths for mkdir/rsync to avoid permission issues
+# - configure git user before commit
+# - trap for cleanup of netrc and tempdir
+# - more defensive error handling and logging
 
 if [[ $# -lt 2 ]]; then
   echo "Usage: $0 owner/repo <dry-run|real> [migrate_path]" >&2
@@ -20,6 +26,13 @@ LOGDIR="${ROOT_DIR}/logs"
 mkdir -p "$LOGDIR"
 DATESTR="$(date -u +%Y%m%d-%H%M%S)"
 LOGFILE="$LOGDIR/${REPO_FULL//\//_}-$DATESTR.log"
+
+# Ensure cleanup on exit
+cleanup() {
+  rm -f "${NETRC_FILE:-}" || true
+  rm -rf "${TMPDIR:-}" || true
+}
+trap cleanup EXIT
 
 # token preference: prefer installation token (workflow), then FORKS_MANAGER_PAT, then GITHUB_TOKEN
 TOKEN="${INSTALLATION_TOKEN:-${FORKS_MANAGER_PAT:-${GITHUB_TOKEN:-}}}"
@@ -76,6 +89,7 @@ dest_rel="$(echo "$dest_rel" | sed -E 's/^[[:space:]\"]+//; s/[[:space:]\"]+$//;
 echo "Destination relative path in monorepo: $dest_rel" | tee -a "$LOGFILE"
 
 SRC_CLONE_URL="https://github.com/${REPO_FULL}.git"
+CENTRAL_REMOTE_URL="https://github.com/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}.git"
 
 # Step 1: clone source (shallow)
 echo "[STEP 1] clone source $SRC_CLONE_URL" | tee -a "$LOGFILE"
@@ -100,95 +114,89 @@ if [[ "$MODE" == "dry-run" ]]; then
   echo "DRY_RUN: would init central repo and copy files to $dest_rel" | tee -a "$LOGFILE"
   echo "DRY_RUN: would create branch import/${name}-${DATESTR} and open PR" | tee -a "$LOGFILE"
 else
-    # --- prepare and authenticate for central repo operations ---
   # create and initialize central working dir
   mkdir -p "$TMPDIR/central"
   pushd "$TMPDIR/central" >/dev/null
 
   git init >>"$LOGFILE" 2>&1
-  git remote add origin "https://github.com/${REPO_CENTRAL_OWNER}/${REPO_CENTRAL_NAME}.git" >>"$LOGFILE" 2>&1 || true
+
+  # configure committer immediately (before any commit)
+  git config user.name "Forks Manager (automation)"
+  git config user.email "noreply@ouritres.local"
+
+  # add remote (no token in URL)
+  git remote add origin "$CENTRAL_REMOTE_URL" >>"$LOGFILE" 2>&1 || true
 
   # Prevent interactive credential prompting
   export GIT_TERMINAL_PROMPT=0
 
-  # sanitize token again (just in case)
-  TOKEN="$(printf '%s' "${TOKEN:-}" | tr -d '\r\n' | sed -E 's/^[[:space:]\"]+//; s/[[:space:]\"]+$//')"
-
-  # Create temporary ~/.netrc for robust auth (used as reliable fallback by git)
+  # Create temporary ~/.netrc for robust auth (used by git over HTTPS)
   NETRC_FILE="${HOME}/.netrc"
   umask 177
   printf "machine github.com\n  login x-access-token\n  password %s\n" "${TOKEN}" > "$NETRC_FILE"
   chmod 600 "$NETRC_FILE"
   echo "[DEBUG] Created temporary netrc at $NETRC_FILE" >>"$LOGFILE"
 
-  # Try fetch with Authorization header (preferred). If it fails, netrc will allow fallback.
+  # Optional debug: enable Git/curl traces if DEBUG_GIT=1 in env
+  if [[ "${DEBUG_GIT:-0}" == "1" ]]; then
+    export GIT_TRACE=1
+    export GIT_CURL_VERBOSE=1
+    export GIT_TRACE_PACKET=1
+    export GIT_TRACE_PERFORMANCE=1
+  fi
+
+  # Try fetch (using netrc authentication)
   set +e
-  # --- DEBUG: enable verbose git/curl traces (temporary) ---
-  export GIT_TRACE=1
-  export GIT_CURL_VERBOSE=1
-  export GIT_TRACE_PACKET=1
-  export GIT_TRACE_PERFORMANCE=1
-  # also ensure no interactive prompt
-  export GIT_TERMINAL_PROMPT=0
-  # --- end DEBUG ---
-  git -c http.extraHeader="Authorization: Bearer ${TOKEN}" fetch --depth=1 origin main >>"$LOGFILE" 2>&1
+  git fetch --depth=1 origin main >>"$LOGFILE" 2>&1
   rc=$?
   if [[ $rc -ne 0 ]]; then
-    echo "Fetch main failed (rc=$rc), trying to fetch origin HEAD (netrc fallback may be used)..." | tee -a "$LOGFILE"
-    git -c http.extraHeader="Authorization: Bearer ${TOKEN}" fetch --depth=1 origin >>"$LOGFILE" 2>&1 || true
+    echo "Fetch main failed (rc=$rc), trying to fetch origin HEAD..." | tee -a "$LOGFILE"
+    git fetch --depth=1 origin >>"$LOGFILE" 2>&1 || true
   fi
   set -e
 
-  # Ensure a local branch exists to commit onto and set committer identity before commit
-  # Prefer origin/main, else origin/master, else create an empty main
+  # Determine a branch to checkout: prefer origin/main, then origin/master, then create empty main
   if git show-ref --verify --quiet refs/remotes/origin/main; then
     git checkout -b main origin/main >>"$LOGFILE" 2>&1 || true
   elif git show-ref --verify --quiet refs/remotes/origin/master; then
     git checkout -b main origin/master >>"$LOGFILE" 2>&1 || true
   else
-    # no remote branch available -> create initial empty main
+    # create initial empty main
     git commit --allow-empty -m "Initialize central repo for imports" >>"$LOGFILE" 2>&1 || true
     git branch -M main >>"$LOGFILE" 2>&1 || true
   fi
 
-  # configure committer BEFORE making changes
-  git config user.name "Forks Manager (automation)"
-  git config user.email "noreply@ouritres.local"
-
-  # ensure parent dirs exist inside central repo and filesystem-level refs dir exists
-  mkdir -p "$(dirname "$dest_rel")"
-  mkdir -p "$dest_rel"
+  # ensure parent dirs exist inside central repo using absolute path
+  mkdir -p "$TMPDIR/central/$(dirname "$dest_rel")"
+  mkdir -p "$TMPDIR/central/$dest_rel"
   # ensure git remote refs dir exists to avoid "unable to create directory" races
-  mkdir -p .git/refs/remotes/origin || true
+  mkdir -p "$TMPDIR/central/.git/refs/remotes/origin" || true
 
-  # sync working tree into destination
-  rsync -a --exclude='.git' --delete "$TMPDIR/src"/ "$dest_rel"/ >>"$LOGFILE" 2>&1
+  # sync working tree into destination (use absolute path)
+  rsync -a --exclude='.git' --delete "$TMPDIR/src"/ "$TMPDIR/central/$dest_rel"/ >>"$LOGFILE" 2>&1
 
-  git add --all "$dest_rel" >>"$LOGFILE" 2>&1 || true
+  # stage changes (in central repo)
+  git -C "$TMPDIR/central" add --all "$dest_rel" >>"$LOGFILE" 2>&1 || true
 
-  if git diff --staged --quiet; then
+  # If no staged changes, skip commit
+  if git -C "$TMPDIR/central" diff --staged --quiet; then
     echo "No changes to import for $REPO_FULL -> $dest_rel" | tee -a "$LOGFILE"
   else
     branch="import/${name}-${DATESTR}"
-    git commit -m "Import ${REPO_FULL} (squashed) into /${dest_rel}" >>"$LOGFILE" 2>&1
-    git checkout -b "$branch" >>"$LOGFILE" 2>&1
+    git -C "$TMPDIR/central" commit -m "Import ${REPO_FULL} (squashed) into /${dest_rel}" >>"$LOGFILE" 2>&1
+    git -C "$TMPDIR/central" checkout -b "$branch" >>"$LOGFILE" 2>&1
 
-    # push using Authorization header first, fallback to netrc if needed
+    # push (netrc will be used for auth)
     set +e
-    git -c http.extraHeader="Authorization: Bearer ${TOKEN}" push origin "$branch" >>"$LOGFILE" 2>&1
+    git -C "$TMPDIR/central" push origin "$branch" >>"$LOGFILE" 2>&1
     PUSH_RC=$?
     set -e
 
     if [[ $PUSH_RC -ne 0 ]]; then
-      echo "Push with http.extraHeader failed (rc=$PUSH_RC). Trying netrc fallback..." | tee -a "$LOGFILE"
-      # Try push again (netrc in place)
-      if ! git push origin "$branch" >>"$LOGFILE" 2>&1; then
-        echo "Fallback push failed as well. See $LOGFILE for details." | tee -a "$LOGFILE"
-        # cleanup netrc and abort
-        rm -f "$NETRC_FILE" || true
-        popd >/dev/null
-        exit 1
-      fi
+      echo "Push failed (rc=$PUSH_RC). See $LOGFILE for details." | tee -a "$LOGFILE"
+      rm -f "$NETRC_FILE" || true
+      popd >/dev/null
+      exit 1
     fi
 
     # create PR via API using the same token
