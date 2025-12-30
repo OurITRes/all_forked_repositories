@@ -123,6 +123,14 @@ else
 
   # Try fetch with Authorization header (preferred). If it fails, netrc will allow fallback.
   set +e
+  # --- DEBUG: enable verbose git/curl traces (temporary) ---
+  export GIT_TRACE=1
+  export GIT_CURL_VERBOSE=1
+  export GIT_TRACE_PACKET=1
+  export GIT_TRACE_PERFORMANCE=1
+  # also ensure no interactive prompt
+  export GIT_TERMINAL_PROMPT=0
+  # --- end DEBUG ---
   git -c http.extraHeader="Authorization: Bearer ${TOKEN}" fetch --depth=1 origin main >>"$LOGFILE" 2>&1
   rc=$?
   if [[ $rc -ne 0 ]]; then
