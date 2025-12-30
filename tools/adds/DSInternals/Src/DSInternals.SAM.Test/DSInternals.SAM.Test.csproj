@@ -1,0 +1,5 @@
+﻿<Project Sdk="MSTest.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\DSInternals.SAM\DSInternals.SAM.csproj" />
+  </ItemGroup>
+</Project>
