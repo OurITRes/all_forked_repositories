@@ -1,0 +1,13 @@
+public: true
+type: "docs"
+category: "reference and outreach"
+tags:
+  - "workflow"
+title: "Documentation Site Guide to Managing Content"
+description: "A guide to adding and managing content in docs.rockarch.org."
+pages:
+  - ["About", "index"]
+  - ["Add Content", "add-content"]
+  - ["Edit Content", "edit-content"]
+  - ["Using Markdown", "using-markdown"]
+  - ["Using Github", "using-github"]
