@@ -148,7 +148,9 @@ def generate_readme_table(entries):
     lines = []
     lines.append("| Name | Upstream | Upstream license | Subtree exists | Verified | Notes |")
     lines.append("| ---- | -------- | ---------------- | -------------: | :------: | ----- |")
-    for e in entries:
+    # Sort entries by name (case-insensitive)
+    entries_sorted = sorted(entries, key=lambda e: (e.get('name') or '').lower())
+    for e in entries_sorted:
         name = e.get('name') or ''
         subtree = e.get('subtree_path') or ''
         # If subtree path exists, make the name a link to the subtree
