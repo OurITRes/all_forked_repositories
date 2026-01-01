@@ -222,6 +222,7 @@ def main():
     sub.add_parser('generate')
     sub.add_parser('scan')
     sub.add_parser('verify-upstreams')
+    sub.add_parser('update-licenses')
     args = parser.parse_args()
     if args.cmd == 'add':
         cmd_add(args)
@@ -235,9 +236,39 @@ def main():
         cmd_scan()
     elif args.cmd == 'verify-upstreams':
         cmd_verify_upstreams()
+    elif args.cmd == 'update-licenses':
+        cmd_update_licenses()
     else:
         parser.print_help()
 
+def cmd_update_licenses():
+    """
+    For all entries with an upstream, update upstream_license_name and upstream_license_url using the GitHub API.
+    """
+    data = load_readme_forks()
+    updated = 0
+    for entry in data:
+        upstream = entry.get('upstream')
+        if not upstream:
+            continue
+        info = fetch_repo_info(upstream)
+        if not info:
+            continue
+        changed = False
+        if entry.get('upstream_license_name') != info['license_name']:
+            entry['upstream_license_name'] = info['license_name']
+            changed = True
+        if entry.get('upstream_license_url') != info['license_html']:
+            entry['upstream_license_url'] = info['license_html']
+            changed = True
+        if changed:
+            updated += 1
+            print(f"Updated license for {entry.get('name')}: {info['license_name']} ({info['license_html']})")
+    if updated:
+        save_readme_forks(data)
+        print(f"{updated} licenses updated in readme_forks.json.")
+    else:
+        print("No licenses needed updating.")
 def cmd_verify_upstreams():
     """
     For all entries with missing upstream, try to guess/check upstream from UPSTREAM.md, UPSTREAM_LICENSE, or README.md in the subtree folder.
