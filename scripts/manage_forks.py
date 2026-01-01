@@ -167,8 +167,17 @@ def cmd_generate(_args):
     if not os.path.exists(README_MD):
         print("README.md introuvable, génération annulée.")
         return
-    with open(README_MD, 'r', encoding='utf-8') as f:
-        content = f.read()
+    content = None
+    for enc in ('utf-8', 'utf-8-sig', 'latin-1'):
+        try:
+            with open(README_MD, 'r', encoding=enc) as f:
+                content = f.read()
+            break
+        except UnicodeDecodeError:
+            continue
+    if content is None:
+        print("Impossible de lire README.md avec les encodages courants (utf-8, utf-8-sig, latin-1). Veuillez convertir le fichier en UTF-8.")
+        return
     start = content.find(MARKER_START)
     end = content.find(MARKER_END)
     if start == -1 or end == -1 or end < start:
