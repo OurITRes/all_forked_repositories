@@ -218,6 +218,8 @@ def main():
     p_remove.add_argument('target', help='upstream owner/repo ou source à supprimer')
     sub.add_parser('list')
     sub.add_parser('generate')
+    sub.add_parser('scan')
+    sub.add_parser('verify-upstreams')
     args = parser.parse_args()
     if args.cmd == 'add':
         cmd_add(args)
@@ -227,9 +229,155 @@ def main():
         cmd_list(args)
     elif args.cmd == 'generate':
         cmd_generate(args)
+    elif args.cmd == 'scan':
+        cmd_scan()
+    elif args.cmd == 'verify-upstreams':
+        cmd_verify_upstreams()
     else:
         parser.print_help()
 
+def cmd_verify_upstreams():
+    """
+    For all entries with missing upstream, try to guess/check upstream from UPSTREAM.md, UPSTREAM_LICENSE, or README.md in the subtree folder.
+    Update readme_forks.json if found.
+    """
+    import re
+    data = load_readme_forks()
+    updated = 0
+    for entry in data:
+        if entry.get('upstream'):
+            continue
+        subtree = entry.get('subtree_path')
+        if not subtree:
+            continue
+        abs_path = os.path.join(ROOT, *subtree.split('/'))
+        upstream = None
+        upstream_url = None
+        upstream_note = ''
+        for marker in ('UPSTREAM.md', 'UPSTREAM_LICENSE', 'README.md'):
+            marker_path = os.path.join(abs_path, marker)
+            if os.path.isfile(marker_path):
+                try:
+                    with open(marker_path, encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    match = re.search(r'https://github.com/([\w\-]+)/([\w\-\.]+)', content)
+                    if match:
+                        upstream = f"{match.group(1)}/{match.group(2)}"
+                        upstream_url = f"https://github.com/{upstream}"
+                        upstream_note = f"Upstream detected from {marker}"
+                        break
+                except Exception as ex:
+                    upstream_note = f"Error reading {marker}: {ex}"
+        if upstream:
+            entry['upstream'] = upstream
+            entry['upstream_url'] = upstream_url
+            notes = entry.get('notes', '')
+            if notes:
+                notes += f"; {upstream_note}"
+            else:
+                notes = upstream_note
+            entry['notes'] = notes
+            updated += 1
+            print(f"Updated {entry.get('name')} ({subtree}): {upstream}")
+    if updated:
+        save_readme_forks(data)
+        print(f"{updated} entries updated in readme_forks.json.")
+    else:
+        print("No missing upstreams could be detected.")
+def cmd_scan():
+    """
+    Scan workspace for folders that are not present in readme_forks.json as subtree_path.
+    Print missing subtrees.
+    """
+    import fnmatch
+    data = load_readme_forks()
+    known_subtrees = set(e.get('subtree_path') for e in data if e.get('subtree_path'))
+    # Folders to ignore
+    ignore = {'.git', '__pycache__', '.vscode', '.idea', '.github', 'node_modules', '.venv', 'env', 'venv', '.mypy_cache'}
+    found_subtrees = set()
+    for root, dirs, files in os.walk(ROOT):
+        # Remove ignored dirs in-place
+        dirs[:] = [d for d in dirs if d not in ignore and not d.startswith('.')]
+        rel_root = os.path.relpath(root, ROOT)
+        if rel_root == '.' or rel_root.startswith('scripts'):
+            continue
+        # Heuristic: consider as subtree if contains UPSTREAM.md, UPSTREAM_LICENSE, README.md, or .git
+        subtree_candidate = False
+        for marker in ('UPSTREAM.md', 'UPSTREAM_LICENSE', 'README.md', '.git'):
+            if marker in files or marker in dirs:
+                subtree_candidate = True
+                break
+        if subtree_candidate:
+            found_subtrees.add(rel_root.replace('\\', '/'))
+    missing = sorted(found_subtrees - known_subtrees)
+    if not missing:
+        print("Aucun dossier manquant détecté (tous les subtrees sont référencés dans readme_forks.json).")
+        return
+    print("Ajout automatique de stubs pour les subtrees absents :")
+    data = load_readme_forks()
+    for m in missing:
+        # Guess name from last part of path
+        name = m.split('/')[-1]
+        abs_path = os.path.join(ROOT, *m.split('/'))
+        upstream = None
+        upstream_url = None
+        upstream_note = ''
+        # Try to detect upstream from UPSTREAM.md or UPSTREAM_LICENSE
+        for marker in ('UPSTREAM.md', 'UPSTREAM_LICENSE'):
+            marker_path = os.path.join(abs_path, marker)
+            if os.path.isfile(marker_path):
+                try:
+                    with open(marker_path, encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    # Look for a GitHub URL
+                    import re
+                    match = re.search(r'https://github.com/([\w\-]+)/([\w\-\.]+)', content)
+                    if match:
+                        upstream = f"{match.group(1)}/{match.group(2)}"
+                        upstream_url = f"https://github.com/{upstream}"
+                        upstream_note = f"Upstream detected from {marker}"
+                        break
+                except Exception as ex:
+                    upstream_note = f"Error reading {marker}: {ex}"
+        if not upstream:
+            upstream_note = "No upstream detected"
+        # Try to detect default branch
+        local_default_branch = 'main'
+        for branch_file in ['main', 'master']:
+            branch_path = os.path.join(abs_path, branch_file)
+            if os.path.isdir(branch_path) or os.path.isfile(branch_path):
+                local_default_branch = branch_file
+                break
+        # Add marker info to notes
+        notes = ["Stub auto-ajouté par scan"]
+        if upstream_note:
+            notes.append(upstream_note)
+        for marker in ('README.md', 'UPSTREAM.md', 'UPSTREAM_LICENSE'):
+            if os.path.isfile(os.path.join(abs_path, marker)):
+                notes.append(f"{marker} present")
+        entry = {
+            'source': name,
+            'owner': 'OurITRes',
+            'name': name,
+            'local_default_branch': local_default_branch,
+            'upstream': upstream,
+            'upstream_url': upstream_url,
+            'upstream_default_branch': None,
+            'upstream_description': '',
+            'upstream_license_name': None,
+            'upstream_license_url': None,
+            'subtree_path': m,
+            'subtree_exists': True,
+            'subtree_license_file': None,
+            'subtree_license_verified': False,
+            'verified': False,
+            'notes': "; ".join(notes),
+            'added_at': datetime.utcnow().isoformat() + 'Z',
+        }
+        data.append(entry)
+        print(f"- {m} (ajouté)")
+    save_readme_forks(data)
+    print(f"{len(missing)} stubs ajoutés à readme_forks.json.")
 
 if __name__ == '__main__':
     main()
