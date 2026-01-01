@@ -146,18 +146,24 @@ def cmd_remove(args):
 
 def generate_readme_table(entries):
     lines = []
-    lines.append("| Source | Upstream | Subtree path | Upstream license | Subtree exists | Verified | Notes |")
-    lines.append("| ------ | -------- | ------------ | ---------------- | -------------: | :------: | ----- |")
+    lines.append("| Name | Upstream | Upstream license | Subtree exists | Verified | Notes |")
+    lines.append("| ---- | -------- | ---------------- | -------------: | :------: | ----- |")
     for e in entries:
-        source = e.get('source') or f"{e.get('owner')}/{e.get('name')}"
+        name = e.get('name') or ''
+        subtree = e.get('subtree_path') or ''
+        # If subtree path exists, make the name a link to the subtree
+        if subtree:
+            subtree_url = f"https://github.com/OurITRes/all_forked_repositories/tree/main/{subtree}"
+            name_md = f"[{name}]({subtree_url})"
+        else:
+            name_md = name
         upstream = e.get('upstream_url') or (f"https://github.com/{e.get('upstream')}") if e.get('upstream') else ''
         upstream_md = f"[{e.get('upstream')}]({upstream})" if upstream else (e.get('upstream') or '')
-        subtree = e.get('subtree_path') or ''
         upstream_license = e.get('upstream_license_name') or ''
         subtree_exists = '✅' if e.get('subtree_exists') else '❌'
         verified = '✅' if e.get('verified') else ''
         notes = (e.get('notes') or '').replace('\n', ' ')
-        lines.append(f"| {source} | {upstream_md} | {subtree} | {upstream_license} | {subtree_exists} | {verified} | {notes} |")
+        lines.append(f"| {name_md} | {upstream_md} | {upstream_license} | {subtree_exists} | {verified} | {notes} |")
     return "\n".join(lines)
 
 
