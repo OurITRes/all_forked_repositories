@@ -223,6 +223,7 @@ def main():
     sub.add_parser('scan')
     sub.add_parser('verify-upstreams')
     sub.add_parser('update-licenses')
+    sub.add_parser('clean-faux-positifs')
     args = parser.parse_args()
     if args.cmd == 'add':
         cmd_add(args)
@@ -238,9 +239,30 @@ def main():
         cmd_verify_upstreams()
     elif args.cmd == 'update-licenses':
         cmd_update_licenses()
+    elif args.cmd == 'clean-faux-positifs':
+        cmd_clean_faux_positifs()
     else:
         parser.print_help()
 
+def cmd_clean_faux_positifs():
+    """
+    Remove entries whose subtree_path is a subfolder of another subtree_path already referenced.
+    """
+    data = load_readme_forks()
+    all_subtrees = set(e.get('subtree_path') for e in data if e.get('subtree_path'))
+    # Only keep entries whose subtree_path is not a subfolder of another subtree_path
+    def is_subfolder(path):
+        for ks in all_subtrees:
+            if ks and ks != path and path.startswith(ks + '/'):
+                return True
+        return False
+    cleaned = [e for e in data if not (e.get('subtree_path') and is_subfolder(e.get('subtree_path')))]
+    removed = len(data) - len(cleaned)
+    if removed:
+        save_readme_forks(cleaned)
+        print(f"{removed} faux positifs supprimés de readme_forks.json.")
+    else:
+        print("Aucun faux positif à supprimer.")
 def cmd_update_licenses():
     """
     For all entries with an upstream, update upstream_license_name and upstream_license_url using the GitHub API.
