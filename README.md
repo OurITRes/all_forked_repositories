@@ -31,5 +31,19 @@
 | [ActiveDirectoryStig](https://github.com/OurITRes/all_forked_repositories/tree/main/frameworks/BAMCIS/ActiveDirectoryStig) | [bamcisnetworks/ActiveDirectoryStig](https://github.com/bamcisnetworks/ActiveDirectoryStig) | MIT License | ✅ | ✅ | UPSTREAM_LICENSE présent. |
 | [Star-Citizen_X56_natural](https://github.com/OurITRes/all_forked_repositories/tree/main/Games/Star-Citizen_X56_natural) | [PaladinTitus/SC_X56](https://github.com/PaladinTitus/SC_X56) |  | ✅ | ✅ | UPSTREAM.md trouvé ; pas de licence détectée automatiquement. |
 | [freeCodeGram](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/laravel/freeCodeGram) | [coderstape/freeCodeGram](https://github.com/coderstape/freeCodeGram) |  | ❌ |  | Subtree non trouvé lors du scan; upstream sans licence déclarée via l'API. |
+| [Legacy](https://github.com/OurITRes/all_forked_repositories/tree/main/intune/securedworkstation/Legacy) | [pelarsen/IntunePowerShellAutomation](https://github.com/pelarsen/IntunePowerShellAutomation) |  | ✅ |  | Stub auto-ajouté par scan; Upstream detected from README.md |
+| [csReporter-master](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/SAT/Azure/AADConnectCsReporter/csReporter-master) |  |  | ✅ |  | Stub auto-ajouté par scan |
+| [csReporter-master](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/SAT/MIM/csReporter-master/csReporter-master) |  |  | ✅ |  | Stub auto-ajouté par scan |
+| [Reveal-MemoryCredentials](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/SAT/PowerShell/RevealWindowsMemoryCredentials/RWMC-Version-0.2/Reveal-MemoryCredentials) |  |  | ✅ |  | Stub auto-ajouté par scan |
+| [comb-master](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/SAT/SharePoint/SP2013FarmComb/comb-master/comb-master) |  |  | ✅ |  | Stub auto-ajouté par scan |
+| [Get-O365GroupReport](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/SAT/o365/Get-O365GroupReport) | [cunninghamp/Office-365-Scripts](https://github.com/cunninghamp/Office-365-Scripts) |  | ✅ |  | Stub auto-ajouté par scan; Upstream detected from README.md |
+| [SPO-Trigger-Reindex](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/SAT/o365/SPOnlineTriggerReindex/SPO-Trigger-Reindex) |  |  | ✅ |  | Stub auto-ajouté par scan |
+| [Keys](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/adds/DSInternals/Keys) |  |  | ✅ |  | Stub auto-ajouté par scan |
+| [Asn1](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/adds/DSInternals/Src/DSInternals.Common/Cryptography/Asn1) | [dotnet/runtime](https://github.com/dotnet/runtime) |  | ✅ |  | Stub auto-ajouté par scan; Upstream detected from README.md |
+| [AD-Expiry-Notification](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/adds/zjorz-Public-AD-Scripts/AD-Expiry-Notification) |  |  | ✅ |  | Stub auto-ajouté par scan |
+| [PingCastle](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/netwrix/pingcastle/PingCastle) | [gentilkiwi/mimikatz](https://github.com/gentilkiwi/mimikatz) |  | ✅ |  | Stub auto-ajouté par scan; Upstream detected from README.md |
+| [gitautodeploy-base-usage](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/python/Git-Auto-Deploy/docker/examples/gitautodeploy-base-usage) |  |  | ✅ |  | Stub auto-ajouté par scan |
+| [image-gitautodeploy](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/python/Git-Auto-Deploy/docker/image-gitautodeploy) |  |  | ✅ |  | Stub auto-ajouté par scan |
+| [docs](https://github.com/OurITRes/all_forked_repositories/tree/main/tools/python/Git-Auto-Deploy/docs) |  |  | ✅ |  | Stub auto-ajouté par scan |
 
 <!-- FORKS_TABLE_END -->
