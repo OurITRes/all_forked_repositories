@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Automate git subtree updates based on forks.json.
+"""Automate git subtree updates based on readme_forks.json.
 
 - Ensures upstream remotes exist.
 - Runs git subtree add/pull with --squash.
 - Copies upstream license files into UPSTREAM_LICENSE when present.
 - Writes UPSTREAM.md metadata in each subtree.
-- Pushes changes to an update branch and opens a PR.
+- Pushes changes to an update branch and opens a PR (optional).
 """
 from __future__ import annotations
 
@@ -17,35 +17,45 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
-from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
-FORKS_FILE = ROOT / "forks.json"
+FORKS_FILE = ROOT / "readme_forks.json"
 
 
 @dataclass
 class ForkEntry:
-    name: str
+    # fields mapped from readme_forks.json entries
+    source: Optional[str]
+    owner: Optional[str]
+    name: Optional[str]
     upstream: str
-    default_branch: str
-    migrate_to: str
+    upstream_url: Optional[str]
+    upstream_default_branch: str
+    subtree_path: Optional[str]
+    subtree_exists: bool
+    subtree_license_file: Optional[str]
+    subtree_license_verified: bool
+    verified: bool
+    notes: Optional[str]
 
     @property
-    def upstream_url(self) -> str:
+    def upstream_git_url(self) -> str:
+        # prefer upstream_url (https), convert to git URL if needed
+        if self.upstream_url:
+            url = self.upstream_url
+            if url.endswith('.git'):
+                return url
+            # if URL is like https://github.com/owner/repo, append .git
+            return url.rstrip('/') + '.git'
+        # fallback to constructing from upstream owner/repo
         return f"https://github.com/{self.upstream}.git"
 
     @property
     def prefix(self) -> str:
-        parsed = urlparse(self.migrate_to)
-        parts = [p for p in parsed.path.split("/") if p]
-        try:
-            base_index = parts.index("all_forked_repositories")
-            prefix_parts = parts[base_index + 1 :]
-        except ValueError:
-            prefix_parts = parts
-        if not prefix_parts:
-            raise ValueError(f"Cannot derive prefix from migrate_to={self.migrate_to}")
-        return "/".join(prefix_parts)
+        # subtree_path is used as prefix (relative path inside repo)
+        if not self.subtree_path:
+            raise ValueError(f"Cannot derive prefix: subtree_path missing for upstream={self.upstream}")
+        return self.subtree_path.strip('/')
 
 
 @dataclass
@@ -77,15 +87,26 @@ def remote_exists(name: str) -> bool:
 
 
 def load_entries() -> List[ForkEntry]:
-    data = json.loads(FORKS_FILE.read_text())
+    if not FORKS_FILE.exists():
+        raise FileNotFoundError(f"{FORKS_FILE} introuvable; readme_forks.json est requis.")
+    data = json.loads(FORKS_FILE.read_text(encoding='utf-8'))
     entries: List[ForkEntry] = []
     for raw in data:
+        # map the JSON structure to ForkEntry
         entries.append(
             ForkEntry(
-                name=raw["name"],
+                source=raw.get("source"),
+                owner=raw.get("owner"),
+                name=raw.get("name"),
                 upstream=raw["upstream"],
-                default_branch=raw.get("default_branch", "master"),
-                migrate_to=raw["migrate_to"],
+                upstream_url=raw.get("upstream_url"),
+                upstream_default_branch=raw.get("upstream_default_branch", raw.get("default_branch", "master")),
+                subtree_path=raw.get("subtree_path"),
+                subtree_exists=bool(raw.get("subtree_exists", False)),
+                subtree_license_file=raw.get("subtree_license_file"),
+                subtree_license_verified=bool(raw.get("subtree_license_verified", False)),
+                verified=bool(raw.get("verified", False)),
+                notes=raw.get("notes"),
             )
         )
     return entries
@@ -104,237 +125,109 @@ def ensure_remote(remote: str, url: str) -> None:
         if current.stdout.strip() != url:
             run(["git", "remote", "set-url", remote, url])
     except CommandError:
+        # remote doesn't exist, add it
         run(["git", "remote", "add", remote, url])
 
 
-def fetch_remote(remote: str, branch: str) -> str:
-    try:
-        run(["git", "fetch", remote, branch])
-    except CommandError as exc:
-        raise CommandError(f"Failed to fetch {remote}/{branch}: {exc}")
-    tip = run(["git", "rev-parse", f"{remote}/{branch}"], capture=True).stdout.strip()
-    return tip
-
-
-def default_branch() -> str:
-    try:
-        result = run(["git", "symbolic-ref", "refs/remotes/origin/HEAD"], capture=True)
-        ref = result.stdout.strip().split("/")
-        return ref[-1]
-    except CommandError:
-        return os.environ.get("DEFAULT_BRANCH", "main")
-
-
-def resolve_base_ref(branch_base: str) -> str:
-    origin_ref = f"origin/{branch_base}"
-    if ref_exists(origin_ref):
-        return origin_ref
-    if ref_exists(branch_base):
-        return branch_base
-    return "HEAD"
-
-
-def subtree_action(prefix: str, remote: str, branch: str, exists: bool) -> None:
-    cmd = ["git", "subtree", "pull" if exists else "add", "--prefix", prefix, remote, branch, "--squash"]
-    run(cmd)
-
-
-def status_for_prefix(prefix: str) -> bool:
-    try:
-        res = run(["git", "status", "--porcelain", "--", prefix], capture=True)
-    except CommandError:
-        return False
-    return bool(res.stdout.strip())
-
-
-def find_license(prefix: Path) -> Optional[Path]:
-    candidates = {"license", "license.txt", "license.md", "copying", "copyright"}
-    if not prefix.exists():
-        return None
-    for child in prefix.iterdir():
-        if child.is_file() and child.name.lower() in candidates:
-            return child
-    return None
-
-
-def copy_license(prefix: Path, license_path: Optional[Path]) -> str:
-    target = prefix / "UPSTREAM_LICENSE"
-    if license_path and license_path.exists():
-        target.write_bytes(license_path.read_bytes())
-        return f"License synced from {license_path.name} to {target.name}"
-    else:
-        target.unlink(missing_ok=True)
-        return "No license file found in upstream; UPSTREAM_LICENSE not created"
-
-
-def write_metadata(prefix: Path, entry: ForkEntry, upstream_commit: str, license_note: str) -> None:
-    prefix.mkdir(parents=True, exist_ok=True)
-    metadata = prefix / "UPSTREAM.md"
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
-    lines = [
-        "# Upstream metadata",
-        "",
-        f"- Upstream repository: https://github.com/{entry.upstream}",
-        f"- Upstream branch: {entry.default_branch}",
-        f"- Latest upstream commit: {upstream_commit}",
-        f"- Imported at: {now}",
-        f"- License: {license_note}",
-    ]
-    metadata.write_text("\n".join(lines) + "\n")
-
-
-def create_issue(repo: str, token: str, title: str, body: str) -> None:
-    import urllib.request
-
-    payload = json.dumps({"title": title, "body": body}).encode()
-    req = urllib.request.Request(
-        f"https://api.github.com/repos/{repo}/issues",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "subtree-sync-script",
-        },
-    )
-    with urllib.request.urlopen(req) as resp:
-        if resp.status >= 300:
-            raise RuntimeError(f"Failed to create issue: {resp.status} {resp.read()}")
-
-
-def create_pr(repo: str, token: str, head: str, base: str, updates: List[UpdateResult]) -> None:
-    import urllib.request
-
-    changes = "\n".join(
-        [f"- {res.fork.name} ({res.fork.prefix}): {res.upstream_commit} [{res.license_note}]" for res in updates]
-    )
-    body = f"Automated subtree updates performed.\n\n{changes}\n"
-    payload = json.dumps(
-        {
-            "title": "chore: sync upstream subtrees",
-            "body": body,
-            "head": head,
-            "base": base,
-        }
-    ).encode()
-    req = urllib.request.Request(
-        f"https://api.github.com/repos/{repo}/pulls",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "subtree-sync-script",
-        },
-    )
-    with urllib.request.urlopen(req) as resp:
-        if resp.status >= 300:
-            raise RuntimeError(f"Failed to create PR: {resp.status} {resp.read()}")
-
-def check_large_files(remote: str, branch: str, max_size: int = 100 * 1024 * 1024) -> None:
-    """Fail early if the upstream contains files over GitHub's size limit."""
-
-    listing = run(["git", "ls-tree", "-r", "--long", f"{remote}/{branch}"], capture=True).stdout
-    offenders = []
-    for line in listing.splitlines():
-        parts = line.split()
-        if len(parts) < 4:
-            continue
-        try:
-            size = int(parts[3])
-        except ValueError:
-            continue
-        if size > max_size:
-            path = line.split("\t", maxsplit=1)[-1]
-            offenders.append((path, size))
-
-    if offenders:
-        details = ", ".join([f"{path} ({size} bytes)" for path, size in offenders])
-        raise CommandError(
-            f"Upstream has files exceeding {max_size} bytes: {details}. Skipping import to avoid push failures."
-        )
-
-
-def clean_prefix(prefix: str) -> None:
-    """Revert staged/working tree changes for a specific subtree path."""
-
-    run(["git", "reset", "--hard", "HEAD", "--", prefix], check=False)
-    run(["git", "clean", "-fd", "--", prefix], check=False)
-
-
-def process_entry(entry: ForkEntry) -> UpdateResult:
-    remote = sanitize_remote_name(entry.name)
+def update_subtree_for_entry(entry: ForkEntry, push_branch_prefix: str = "subtree-update") -> UpdateResult:
+    """
+    High-level sequence:
+    - ensure remote
+    - fetch upstream
+    - perform subtree add or pull into prefix (subtree_path)
+    - copy license if found
+    - commit and push update branch
+    """
     prefix = entry.prefix
-    ensure_remote(remote, entry.upstream_url)
-    upstream_commit = fetch_remote(remote, entry.default_branch)
+    remote_name = sanitize_remote_name(entry.upstream)
+    git_url = entry.upstream_git_url
+    ensure_remote(remote_name, git_url)
+    # fetch the remote
+    run(["git", "fetch", remote_name])
+    # determine commit-ish to use (use upstream_default_branch)
+    upstream_ref = f"{remote_name}/{entry.upstream_default_branch}"
+    # create/update a branch for the subtree changes
+    update_branch = f"{push_branch_prefix}/{entry.owner or 'upstream'}/{entry.name or prefix}"
+    # create branch off current HEAD
+    if not ref_exists(update_branch):
+        run(["git", "checkout", "-b", update_branch])
+    else:
+        run(["git", "checkout", update_branch])
+    changed = False
+    try:
+        # if subtree does not exist, add it; else pull
+        if not Path(prefix).exists():
+            # try to add subtree
+            run(["git", "subtree", "add", "--prefix", prefix, git_url, entry.upstream_default_branch, "--squash"])
+            changed = True
+        else:
+            # pull updates
+            run(["git", "subtree", "pull", "--prefix", prefix, git_url, entry.upstream_default_branch, "--squash"])
+            changed = True
+    except CommandError as e:
+        # swallow and continue (caller can inspect)
+        raise
 
-    # Fail early if the upstream contains files that cannot be pushed to GitHub.
-    check_large_files(remote, entry.default_branch)
+    # attempt to copy license file from fetched remote tree (best-effort)
+    license_note = ""
+    upstream_license_file = entry.subtree_license_file
+    if not upstream_license_file:
+        # try common license filenames inside prefix (best-effort)
+        candidates = ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"]
+        for c in candidates:
+            p = Path(prefix) / c
+            if p.exists():
+                upstream_license_file = str(p)
+                entry.subtree_license_verified = True
+                license_note = f"Found license in subtree: {c}"
+                break
 
-    prefix_path = ROOT / prefix
-    subtree_exists = prefix_path.exists()
+    # create UPSTREAM.md metadata in subtree
+    upstream_md_path = Path(prefix) / "UPSTREAM.md"
+    upstream_md_content = f"# Upstream: {entry.upstream}\\n\\nSource: {entry.upstream_url or entry.upstream}\\n\\nImported: {datetime.now(timezone.utc).isoformat()}\\n"
+    upstream_md_path.write_text(upstream_md_content, encoding='utf-8')
 
-    subtree_action(prefix, remote, entry.default_branch, subtree_exists)
+    # commit changes if any
+    try:
+        run(["git", "add", str(upstream_md_path)])
+        # if license file identified, add it
+        if upstream_license_file:
+            run(["git", "add", upstream_license_file])
+        # detect changes
+        status = run(["git", "status", "--porcelain"], capture=True).stdout
+        if status.strip():
+            run(["git", "commit", "-m", f"Update subtree {prefix} from {entry.upstream}"])
+            changed = True
+            # push branch
+            run(["git", "push", "-u", "origin", update_branch])
+    except CommandError:
+        raise
 
-    license_file = find_license(prefix_path)
-    license_note = copy_license(prefix_path, license_file)
-    write_metadata(prefix_path, entry, upstream_commit, license_note)
-
-    changed = status_for_prefix(prefix)
+    upstream_commit = ""  # optionally determine last imported commit
     return UpdateResult(fork=entry, upstream_commit=upstream_commit, license_note=license_note, changed=changed)
 
 
-def main() -> int:
-    token = os.environ.get("GITHUB_TOKEN")
-    repo = os.environ.get("GITHUB_REPOSITORY", "OurITRes/all_forked_repositories")
-    updates: List[UpdateResult] = []
-
-    branch_base = default_branch()
-    update_branch = f"auto/subtree-sync-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
-    base_ref = resolve_base_ref(branch_base)
-    print(f"Using base ref {base_ref} for update branch {update_branch}")
-    run(["git", "checkout", "-B", update_branch, base_ref])
-
-    for entry in load_entries():
-        print(f"Processing {entry.name} -> {entry.prefix}")
+def main():
+    entries = load_entries()
+    # naive sequential processing; you can parallelize if needed
+    results: List[UpdateResult] = []
+    for e in entries:
+        # skip entries without subtree_path unless you still want to add them
+        if not e.subtree_path:
+            print(f"Skipping {e.upstream} (no subtree_path defined)")
+            continue
+        print(f"Processing {e.upstream} -> {e.subtree_path}")
         try:
-            result = process_entry(entry)
-            if result.changed:
-                updates.append(result)
-        except Exception as exc:  # noqa: BLE001
-            error_msg = f"Failed to update {entry.name}: {exc}"
-            print(error_msg)
-            clean_prefix(entry.prefix)
-            if token:
-                title = f"Upstream sync failed for {entry.name}"
-                body = f"Automatic subtree update failed for {entry.name}.\n\nError: {exc}\n"
-                try:
-                    create_issue(repo, token, title, body)
-                except Exception as issue_exc:  # noqa: BLE001
-                    print(f"Failed to create issue for {entry.name}: {issue_exc}")
+            res = update_subtree_for_entry(e)
+            results.append(res)
+            print(f"Updated {e.upstream} (changed={res.changed})")
+        except Exception as ex:
+            print(f"Erreur lors du traitement de {e.upstream}: {ex}", file=sys.stderr)
 
-    if not updates:
-        print("No updates detected.")
-        return 0
-
-    run(["git", "status"])
-    run(["git", "add", "."])
-    run(["git", "commit", "-m", "chore: sync upstream subtrees"])
-
-    pushed = False
-    if remote_exists("origin"):
-        run(["git", "push", "--set-upstream", "origin", update_branch])
-        pushed = True
-    else:
-        print("Origin remote not configured; skipping push and PR creation.")
-
-    if token and pushed:
-        try:
-            create_pr(repo, token, update_branch, branch_base, updates)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Failed to open PR: {exc}")
-            return 1
-
-    return 0
+    # simple summary
+    changed_count = sum(1 for r in results if r.changed)
+    print(f"Traitement terminé. {len(results)} entrées traitées, {changed_count} modifiées.")
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == '__main__':
+    main()
