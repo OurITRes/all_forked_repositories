@@ -1,4 +1,3 @@
-```python
 #!/usr/bin/env python3
 """
 Gestion simple des forks et génération automatique du tableau dans README.md.
@@ -20,7 +19,7 @@ import requests
 from datetime import datetime
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-FORKS_JSON = os.path.join(ROOT, 'forks.json')
+FORKS_JSON = os.path.join(ROOT, 'readme_forks.json')
 README_MD = os.path.join(ROOT, 'README.md')
 
 MARKER_START = '<!-- FORKS_TABLE_START -->'
@@ -68,8 +67,8 @@ def fetch_repo_info(fullname):
         # We can use the license key to point to choosealicense or use repo html + /blob/.../LICENSE (best-effort)
         try:
             lic = github_get(license_api_url.replace(GITHUB_API, '')) if license_api_url.startswith(GITHUB_API) else None
-            if lic and lic.get('html_url'):
-                license_html = lic.get('html_url')
+            if lic and lic.get('upstream_url'):
+                license_html = lic.get('upstream_url')
         except Exception:
             license_html = None
     # fallback: try to point at the repo's LICENSE file
@@ -77,10 +76,10 @@ def fetch_repo_info(fullname):
         default_branch = repo_data.get('default_branch') or 'main'
         license_html = f'{repo_data.get("html_url")}/blob/{default_branch}/LICENSE'
     return {
-        'full_name': repo_data.get('full_name'),
-        'html_url': repo_data.get('html_url'),
-        'description': repo_data.get('description') or '',
-        'license_name': license_name or '',
+        'upstream': repo_data.get('upstream'),
+        'upstream_url': repo_data.get('upstream_url'),
+        'upstream_description': repo_data.get('upstream_description') or '',
+        'upstream_license_name': license_name or '',
         'license_url': license_html
     }
 
@@ -88,7 +87,7 @@ def add_fork(args):
     fullname = args.repo
     subdir = args.subdir
     forks = load_forks()
-    if any(f.get('full_name', '').lower() == fullname.lower() for f in forks):
+    if any(f.get('upstream', '').lower() == fullname.lower() for f in forks):
         print(f'{fullname} existe déjà dans {FORKS_JSON}')
         return
     info = None
@@ -101,12 +100,12 @@ def add_fork(args):
         print(f'Impossible de récupérer les infos pour {fullname}')
         sys.exit(1)
     entry = {
-        'full_name': info['full_name'],
-        'repo_url': info['html_url'],
-        'description': info['description'],
-        'license_name': info['license_name'],
+        'upstream': info['upstream'],
+        'repo_url': info['upstream_url'],
+        'upstream_description': info['upstream_description'],
+        'upstream_license_name': info['upstream_license_name'],
         'license_url': info['license_url'],
-        'subdir': subdir or f'./{fullname.split("/",1)[1]}',
+        'subtree_path': subdir or f'./{fullname.split("/",1)[1]}',
         'added_at': datetime.utcnow().isoformat() + 'Z'
     }
     forks.append(entry)
@@ -117,7 +116,7 @@ def add_fork(args):
 def remove_fork(args):
     fullname = args.repo
     forks = load_forks()
-    new = [f for f in forks if f.get('full_name','').lower() != fullname.lower()]
+    new = [f for f in forks if f.get('upstream','').lower() != fullname.lower()]
     if len(new) == len(forks):
         print(f'{fullname} non trouvé dans {FORKS_JSON}')
         return
@@ -131,7 +130,7 @@ def list_forks(_args):
         print('Aucun fork enregistré.')
         return
     for f in forks:
-        print(f"- {f.get('full_name')} -> subdir: {f.get('subdir')}")
+        print(f"- {f.get('upstream')} -> subdir: {f.get('subtree_path')}")
 
 def generate_readme():
     forks = load_forks()
@@ -139,13 +138,13 @@ def generate_readme():
     lines = []
     lines.append('| Nom | Description | Licence |')
     lines.append('|---|---|---|')
-    for f in sorted(forks, key=lambda x: x.get('full_name','').lower()):
-        name = f.get('full_name')
-        sub = f.get('subdir') or './'
+    for f in sorted(forks, key=lambda x: x.get('upstream','').lower()):
+        name = f.get('upstream')
+        sub = f.get('subtree_path') or './'
         # Make relative link to subdir as requested
         name_link = f'[{name}]({sub})'
-        desc = (f.get('description') or '').replace('\n',' ').strip()
-        lic_name = f.get('license_name') or 'Unknown'
+        desc = (f.get('upstream_description') or '').replace('\n',' ').strip()
+        lic_name = f.get('upstream_license_name') or 'Unknown'
         lic_url = f.get('license_url')
         if lic_url:
             lic = f'[{lic_name}]({lic_url})'
