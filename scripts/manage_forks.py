@@ -2,14 +2,26 @@
 """
 Gérer readme_forks.json et génération automatique du tableau dans README.md.
 
-Usage:
+Usages possibles :
   python scripts/manage_forks.py add owner/repo --source OurITRes/Repo --subtree path/to/subtree --local-branch main
+      # Ajoute une entrée à readme_forks.json
   python scripts/manage_forks.py remove owner/repo-or-source
+      # Supprime une entrée par upstream ou source
   python scripts/manage_forks.py list
+      # Liste les entrées présentes
   python scripts/manage_forks.py generate
+      # Génère le tableau dans README.md
+  python scripts/manage_forks.py scan
+      # Scanne le workspace pour détecter les subtrees non référencés et ajoute des stubs
+  python scripts/manage_forks.py verify-upstreams
+      # Tente de détecter et renseigner les upstreams manquants à partir des fichiers UPSTREAM.md, UPSTREAM_LICENSE, README.md
+  python scripts/manage_forks.py update-licenses
+      # Met à jour les informations de licence upstream via l'API GitHub
+  python scripts/manage_forks.py clean-faux-positifs
+      # Supprime les entrées dont le subtree_path est un sous-dossier d'un autre subtree déjà référencé
 
 Le script lit/écrit readme_forks.json (à la racine) et met à jour README.md (à la racine).
-Pour des requêtes GitHub plus permissives, exporte GITHUB_TOKEN.
+Pour des requêtes GitHub plus permissives, exportez GITHUB_TOKEN.
 """
 import os
 import sys
