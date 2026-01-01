@@ -3,23 +3,30 @@
 Gérer readme_forks.json et génération automatique du tableau dans README.md.
 
 Usages possibles :
+  # Ajoute une entrée à readme_forks.json
   python scripts/manage_forks.py add owner/repo --source OurITRes/Repo --subtree path/to/subtree --local-branch main
-      # Ajoute une entrée à readme_forks.json
-  python scripts/manage_forks.py remove owner/repo-or-source
-      # Supprime une entrée par upstream ou source
-  python scripts/manage_forks.py list
-      # Liste les entrées présentes
-  python scripts/manage_forks.py generate
-      # Génère le tableau dans README.md
-  python scripts/manage_forks.py scan
-      # Scanne le workspace pour détecter les subtrees non référencés et ajoute des stubs
-  python scripts/manage_forks.py verify-upstreams
-      # Tente de détecter et renseigner les upstreams manquants à partir des fichiers UPSTREAM.md, UPSTREAM_LICENSE, README.md
-  python scripts/manage_forks.py update-licenses
-      # Met à jour les informations de licence upstream via l'API GitHub
-  python scripts/manage_forks.py clean-faux-positifs
-      # Supprime les entrées dont le subtree_path est un sous-dossier d'un autre subtree déjà référencé
 
+  # Supprime une entrée par upstream ou source    
+  python scripts/manage_forks.py remove owner/repo-or-source
+
+  # Liste les entrées présentes    
+  python scripts/manage_forks.py list
+
+  # Génère le tableau dans README.md    
+  python scripts/manage_forks.py generate
+
+  # Scanne le workspace pour détecter les subtrees non référencés et ajoute des stubs    
+  python scripts/manage_forks.py scan
+      
+  # Tente de détecter et renseigner les upstreams manquants à partir des fichiers UPSTREAM.md, UPSTREAM_LICENSE, README.md
+  python scripts/manage_forks.py verify-upstreams
+
+  # Met à jour les informations de licence upstream via l'API GitHub    
+  python scripts/manage_forks.py update-licenses
+
+  # Supprime les entrées dont le subtree_path est un sous-dossier d'un autre subtree déjà référencé    
+  python scripts/manage_forks.py clean-faux-positifs
+      
 Le script lit/écrit readme_forks.json (à la racine) et met à jour README.md (à la racine).
 Pour des requêtes GitHub plus permissives, exportez GITHUB_TOKEN.
 """
@@ -335,6 +342,20 @@ def cmd_verify_upstreams():
                         break
                 except Exception as ex:
                     upstream_note = f"Error reading {marker}: {ex}"
+            for marker in ('UPSTREAM.md', 'UPSTREAM_LICENSE', 'README.md', 'LICENSE', 'LICENSE.txt', 'UPSTREAM_LICENSE.txt', 'license.md', 'LICENSE.md'):
+                marker_path = os.path.join(abs_path, marker)
+                if os.path.isfile(marker_path):
+                    try:
+                        with open(marker_path, encoding='utf-8', errors='ignore') as f:
+                            content = f.read()
+                        match = re.search(r'https://github.com/([\w\-]+)/([\w\-\.]+)', content)
+                        if match:
+                            upstream = f"{match.group(1)}/{match.group(2)}"
+                            upstream_url = f"https://github.com/{upstream}"
+                            upstream_note = f"Upstream detected from {marker}"
+                            break
+                    except Exception as ex:
+                        upstream_note = f"Error reading {marker}: {ex}"
         if upstream:
             entry['upstream'] = upstream
             entry['upstream_url'] = upstream_url
@@ -432,6 +453,9 @@ def cmd_scan():
         for marker in ('README.md', 'UPSTREAM.md', 'UPSTREAM_LICENSE'):
             if os.path.isfile(os.path.join(abs_path, marker)):
                 notes.append(f"{marker} present")
+            for marker in ('README.md', 'UPSTREAM.md', 'UPSTREAM_LICENSE', 'LICENSE', 'LICENSE.txt', 'UPSTREAM_LICENSE.txt', 'license.md', 'LICENSE.md'):
+                if os.path.isfile(os.path.join(abs_path, marker)):
+                    notes.append(f"{marker} present")
         entry = {
             'source': name,
             'owner': 'OurITRes',
