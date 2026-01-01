@@ -184,7 +184,11 @@ def cmd_generate(_args):
 def cmd_list(_args):
     data = load_readme_forks()
     for e in data:
-        source = e.get('source') or f"{e.get('owner')}/{e.get('name')}"
+        source = e.get('source') or f"{e.get('owner','')}/{e.get('name','')}".strip('/')
+        upstream = e.get('upstream', '')
+        subtree = e.get('subtree_path', '')
+        verified = bool(e.get('verified', False))
+        print(f"- {source} -> upstream: {upstream} subtree: {subtree} verified: {verified}")
 
 
 def main():
