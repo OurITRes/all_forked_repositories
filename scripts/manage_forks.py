@@ -325,6 +325,12 @@ def cmd_scan():
     import fnmatch
     data = load_readme_forks()
     known_subtrees = set(e.get('subtree_path') for e in data if e.get('subtree_path'))
+    # Helper: check if a path is a subfolder of any known subtree
+    def is_subfolder_of_known(path):
+        for ks in known_subtrees:
+            if ks and (path == ks or path.startswith(ks + '/')):
+                return True
+        return False
     # Folders to ignore
     ignore = {'.git', '__pycache__', '.vscode', '.idea', '.github', 'node_modules', '.venv', 'env', 'venv', '.mypy_cache'}
     found_subtrees = set()
@@ -332,7 +338,11 @@ def cmd_scan():
         # Remove ignored dirs in-place
         dirs[:] = [d for d in dirs if d not in ignore and not d.startswith('.')]
         rel_root = os.path.relpath(root, ROOT)
+        rel_root_norm = rel_root.replace('\\', '/')
         if rel_root == '.' or rel_root.startswith('scripts'):
+            continue
+        # Ignore subfolders of already referenced subtrees
+        if is_subfolder_of_known(rel_root_norm):
             continue
         # Heuristic: consider as subtree if contains UPSTREAM.md, UPSTREAM_LICENSE, README.md, or .git
         subtree_candidate = False
@@ -341,7 +351,7 @@ def cmd_scan():
                 subtree_candidate = True
                 break
         if subtree_candidate:
-            found_subtrees.add(rel_root.replace('\\', '/'))
+            found_subtrees.add(rel_root_norm)
     missing = sorted(found_subtrees - known_subtrees)
     if not missing:
         print("Aucun dossier manquant détecté (tous les subtrees sont référencés dans readme_forks.json).")
