@@ -1,7 +1,1 @@
-# Upstream metadata
-
-- Upstream repository: https://github.com/bamcisnetworks/ActiveDirectoryStig
-- Upstream branch: master
-- Latest upstream commit: 14c4a049dc107f890c8830bb56512d016246a741
-- Imported at: 2025-12-30 16:54:51 UTC
-- License: License synced from LICENSE to UPSTREAM_LICENSE
+# Upstream: bamcisnetworks/ActiveDirectoryStig\n\nSource: https://github.com/bamcisnetworks/ActiveDirectoryStig\n\nImported: 2026-01-05T06:34:40.155668+00:00\n
