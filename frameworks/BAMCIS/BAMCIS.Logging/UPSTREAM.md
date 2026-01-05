@@ -1,7 +1,1 @@
-# Upstream metadata
-
-- Upstream repository: https://github.com/bamcisnetworks/BAMCIS.Logging
-- Upstream branch: master
-- Latest upstream commit: 9e9fe8d0e8144bfd82d40adcb39a70d92e0d2c05
-- Imported at: 2025-12-30 16:54:43 UTC
-- License: License synced from LICENSE to UPSTREAM_LICENSE
+# Upstream: bamcisnetworks/BAMCIS.Logging\n\nSource: https://github.com/bamcisnetworks/BAMCIS.Logging\n\nImported: 2026-01-05T06:34:29.895800+00:00\n
