@@ -1,21 +1,16 @@
-﻿using DSInternals.Common.Data;
-using System;
-using System.Security.Principal;
+﻿namespace DSInternals.Common.Exceptions;
 
-namespace DSInternals.Common.Exceptions
+[Serializable]
+public abstract class DirectoryObjectException : DirectoryException
 {
-    [Serializable]
-    public abstract class DirectoryObjectException : DirectoryException
+    public object ObjectIdentifier
     {
-        public object ObjectIdentifier
-        {
-            get;
-            private set;
-        }
+        get;
+        private set;
+    }
 
-        public DirectoryObjectException(object objectIdentifier, Exception innerException = null) : base(innerException)
-        {
-            this.ObjectIdentifier = objectIdentifier;
-        }
+    public DirectoryObjectException(object objectIdentifier, Exception innerException = null) : base(innerException)
+    {
+        this.ObjectIdentifier = objectIdentifier;
     }
 }

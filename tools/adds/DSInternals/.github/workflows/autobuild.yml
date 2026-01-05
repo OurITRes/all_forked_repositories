@@ -21,7 +21,7 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: true
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v2
@@ -29,9 +29,9 @@ jobs:
         msbuild-architecture: x64 # default is x86
 
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v5
       with:
-        # .NET SDK 10 is used for build. Platform-specific IJW hosts from previous .NET SDKs are used when building C++/CLI projects.
+        # Platform-specific IJW hosts from previous .NET SDKs are used when building C++/CLI projects.
         dotnet-version: |
           8.0.x
           9.0.x
@@ -73,7 +73,7 @@ jobs:
     - name: Run Unit Tests
       working-directory: Src
       run: |
-        dotnet test DSInternals.TestsOnly.slnf --configuration Debug --no-build -- --report-trx --results-directory "${{ github.workspace }}/TestResults"
+        dotnet test --solution DSInternals.TestsOnly.slnf --configuration Debug --no-build -- --report-trx --results-directory "${{ github.workspace }}/TestResults"
 
     - name: Run PowerShell Desktop Tests
       working-directory: Scripts
@@ -87,7 +87,7 @@ jobs:
 
     - name: Upload Test Results as Artifact
       if: ${{ !cancelled() }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: TestResults
         path: TestResults/*
@@ -110,13 +110,13 @@ jobs:
         echo "version=$version" >> $env:GITHUB_OUTPUT
 
     - name: Upload PowerShell Module as Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: DSInternals_v${{ steps.get-module-version.outputs.version }}_debug
         path: Build/bin/DSInternals.PowerShell/Debug
 
     - name: Upload NuGet Packages as Artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: NuGet_v${{ steps.get-module-version.outputs.version }}_debug
         path: Build/package/debug/*nupkg
@@ -127,7 +127,7 @@ jobs:
         choco pack Src/DSInternals.PowerShell/Chocolatey/dsinternals-psmodule.nuspec --version=${{ steps.get-module-version.outputs.version }} --output-directory=Build/package/Chocolatey --execution-timeout=60 --confirm configuration=Debug
 
     - name: Upload Chocolatey Package as Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: Chocolatey_v${{ steps.get-module-version.outputs.version }}_debug
         path: Build/package/Chocolatey/*.nupkg
