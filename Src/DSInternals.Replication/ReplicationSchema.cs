@@ -1,5 +1,4 @@
-﻿using DSInternals.Common;
-using DSInternals.Common.Schema;
+﻿using DSInternals.Common.Schema;
 using DSInternals.Replication.Model;
 
 namespace DSInternals.Replication;
@@ -8,7 +7,7 @@ public class ReplicationSchema : BaseSchema
 {
     public void AddSchemaObject(ReplicaObject schemaObject)
     {
-        Validator.AssertNotNull(schemaObject, nameof(schemaObject));
+        ArgumentNullException.ThrowIfNull(schemaObject);
 
         if (schemaObject.IsDeleted)
         {
