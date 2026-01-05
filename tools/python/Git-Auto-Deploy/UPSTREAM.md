@@ -1,7 +1,1 @@
-# Upstream metadata
-
-- Upstream repository: https://github.com/olipo186/Git-Auto-Deploy
-- Upstream branch: master
-- Latest upstream commit: 43f53d10a1910f513fed44f1c248e0b6d85494e7
-- Imported at: 2025-12-30 16:54:00 UTC
-- License: License synced from LICENSE to UPSTREAM_LICENSE
+# Upstream: olipo186/Git-Auto-Deploy\n\nSource: https://github.com/olipo186/Git-Auto-Deploy\n\nImported: 2026-01-05T06:33:34.059855+00:00\n
