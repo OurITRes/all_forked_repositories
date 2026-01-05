@@ -1,7 +1,1 @@
-# Upstream metadata
-
-- Upstream repository: https://github.com/bamcisnetworks/BAMCIS.TokenManipulation
-- Upstream branch: master
-- Latest upstream commit: 959cde4a891068cab825f7c6640958b28a4dd847
-- Imported at: 2025-12-30 16:54:42 UTC
-- License: License synced from LICENSE to UPSTREAM_LICENSE
+# Upstream: bamcisnetworks/BAMCIS.TokenManipulation\n\nSource: https://github.com/bamcisnetworks/BAMCIS.TokenManipulation\n\nImported: 2026-01-05T06:34:28.155049+00:00\n
