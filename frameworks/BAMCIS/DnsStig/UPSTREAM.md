@@ -1,7 +1,1 @@
-# Upstream metadata
-
-- Upstream repository: https://github.com/bamcisnetworks/DnsStig
-- Upstream branch: master
-- Latest upstream commit: 52dae30a144d4923e0f838351eafe681eb464952
-- Imported at: 2025-12-30 16:54:47 UTC
-- License: License synced from LICENSE to UPSTREAM_LICENSE
+# Upstream: bamcisnetworks/DnsStig\n\nSource: https://github.com/bamcisnetworks/DnsStig\n\nImported: 2026-01-05T06:34:34.851196+00:00\n
